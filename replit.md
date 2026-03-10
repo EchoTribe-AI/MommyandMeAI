@@ -1,22 +1,27 @@
-# Mommy & Me Collective — AI Agent Strategy App
+# Mommy & Me Collective — AI Agent App
 
 ## Overview
-A Flask web application serving three HTML strategy/architecture documents for the Mommy & Me Collective AI Agent project, with tab navigation between pages.
+A Flask web application with a prototype app demo as the home page, plus three linked strategy/architecture documents navigable via a sticky tab bar.
 
 ## Structure
-- `app.py` — Flask server serving static HTML pages on port 5000
-- `steph-ai-plan.html` — AI Agent Strategy Plan document (home page)
-- `steph-architecture.html` — AI Agent Architecture Map document
+- `app.py` — Flask server on port 5000
+- `index.html` — App prototype (home page: Visitor View + Team Dashboard)
+- `steph-ai-plan.html` — AI Agent Strategy Plan
+- `steph-architecture.html` — AI Agent Architecture Map
 - `steph-connection-map.html` — Storefront Audit & Data Connection Map
-- `zipFile.zip` — Original uploaded zip containing initial HTML files
+- `zipFile.zip` — Original uploaded zip with initial HTML files
 
 ## Routes
-- `/` or `/plan` — AI Agent Strategy Plan (home)
+- `/` — App prototype (Visitor View + Team Dashboard)
+- `/plan` — AI Agent Strategy Plan
 - `/architecture` — Architecture Map
 - `/connections` — Storefront & Data Connection Map
 
 ## Navigation
-All pages have a sticky tab bar at the top with 3 tabs: Build Plan, Architecture, Connections. Active tab is highlighted with a coral underline.
+- Home page (prototype) has no tab bar — it's standalone
+- The 3 doc pages (/plan, /architecture, /connections) each have a sticky top nav with:
+  - "← Home" button (returns to prototype)
+  - 3 tabs: Build Plan / Architecture / Connections (active tab highlighted with coral underline)
 
 ## Tech Stack
 - Python 3.11

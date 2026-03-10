@@ -214,15 +214,27 @@ td.warn { color: #E65100; font-weight: 700; }
   color: white;
   border-bottom-color: var(--coral);
 }
+.tab-nav .home-btn {
+  color: rgba(255,255,255,0.45);
+  border-right: 1px solid rgba(255,255,255,0.12);
+  margin-right: 4px;
+  letter-spacing: 0.5px;
+}
+.tab-nav .home-btn:hover {
+  color: rgba(255,255,255,0.85);
+  background: rgba(255,255,255,0.06);
+  border-bottom-color: transparent;
+}
 @media (max-width: 640px) {
-  .tab-nav a { padding: 10px 14px; font-size: 11px; letter-spacing: 0.5px; }
+  .tab-nav a { padding: 10px 12px; font-size: 11px; letter-spacing: 0.5px; }
 }
 </style>
 </head>
 <body>
 
 <nav class="tab-nav">
-  <a href="/">Build Plan</a>
+  <a href="/" class="home-btn">← Home</a>
+  <a href="/plan">Build Plan</a>
   <a href="/architecture" class="active">Architecture</a>
   <a href="/connections">Connections</a>
 </nav>
