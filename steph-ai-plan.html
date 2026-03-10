@@ -403,9 +403,52 @@
     .arch-flow { flex-direction: column; align-items: flex-start; }
     .page { padding: 32px 20px; }
   }
+  .tab-nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--charcoal);
+    display: flex;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  }
+  .tab-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 28px;
+    font-family: 'Nunito', sans-serif;
+    font-size: 13px;
+    font-weight: 800;
+    text-decoration: none;
+    color: rgba(255,255,255,0.6);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s ease;
+    border-bottom: 3px solid transparent;
+  }
+  .tab-nav a:hover {
+    color: white;
+    background: rgba(255,255,255,0.05);
+  }
+  .tab-nav a.active {
+    color: white;
+    border-bottom-color: var(--coral);
+  }
+  @media (max-width: 640px) {
+    .tab-nav a { padding: 10px 14px; font-size: 11px; letter-spacing: 0.5px; }
+  }
 </style>
 </head>
 <body>
+
+<nav class="tab-nav">
+  <a href="/" class="active">Build Plan</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/connections">Connections</a>
+</nav>
 
 <!-- COVER -->
 <div class="cover">
