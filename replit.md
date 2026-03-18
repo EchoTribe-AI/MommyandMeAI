@@ -25,31 +25,42 @@ A Flask web application with a prototype app demo as the home page, plus three l
 
 ## Tech Stack
 - Python 3.11 + Flask
-- Claude AI (Anthropic API) for chat responses
+- Claude AI (Anthropic Opus) for chat responses
+- Product Resolver with CVR routing logic
+- Walmart, Crawlbase, and Impact API integrations
 - Responsive HTML/CSS/JavaScript frontend
 
 ## Features
 
-### Chat with Product Recommendations
-- **Smart Chat Interface** — In Visitor View, users can ask questions via suggestion buttons or free text
-- **Claude AI Integration** — Backend calls Claude Sonnet 3.5 with a system prompt that includes your product catalog
-- **Product Cards** — When Claude recommends products, they're automatically parsed and rendered as mobile-friendly cards in chat
-- **Affiliate Links** — Each product card links directly to retailers (Amazon, Walmart, Ulta, Target, Wayfair) with your affiliate tags
-- **Savings Badges** — Automatically calculates and displays discount percentages for sale products
+### Chat with Product Recommendations (Phase 1: Complete ✅)
+- **Smart Chat Interface** — Users ask via suggestion buttons or free text
+- **Claude AI Integration** — Claude Opus recommends products with `PRODUCTS:` or `SEARCH:` directives
+- **Dual Product Source:**
+  - **Hot Score Catalog** (10 curated products) — Static, always available
+  - **API Search** (Real-time Walmart products) — Via SEARCH: fallback when Hot Score doesn't match
+- **Product Cards** — Mobile-responsive cards with emoji, price, savings %, retailer, affiliate "Shop Now" link
+- **Smart Routing** — CVR-based retailer selection:
+  - Toys/Baby/Kids → Walmart (16.7% CVR)
+  - Beauty → Ulta ($270+ revenue per product)
+  - Home → Wayfair (highest AOV)
+  - Household/Food → Amazon ($80K+ YTD)
 
 ### Product Catalog
-10 curated products with:
-- Name, emoji, price, sale price
-- Retailer and affiliate link
-- Hot Score and category
+**Hot Score Catalog:** 10 curated, high-performing products  
+**API Integration:** Walmart product search + real-time availability (when API keys configured)
 
 ### How It Works
-1. User clicks a suggestion chip or types a question
-2. `sendChat()` sends the message to `/api/chat` endpoint
-3. Backend creates a prompt with full product data + user message
-4. Claude responds with text + `PRODUCTS: 0,1,2` line
-5. Backend parses the line, returns both text and product objects
-6. Frontend renders Steph's text reply + product cards below it
+1. User clicks suggestion chip or types question
+2. `sendChat()` sends to `/api/chat` endpoint
+3. Claude Opus decides: `PRODUCTS: 0,1,2` (use Hot Score) or `SEARCH: query` (search APIs)
+4. **If PRODUCTS:** Backend returns matching products from PRODUCTS array
+5. **If SEARCH:** ProductResolver:
+   - Detects category
+   - Checks CVR routing rules
+   - Calls appropriate API (Walmart first for toys/baby)
+   - Generates Impact affiliate links
+   - Returns real-time products
+6. Frontend renders Steph's reply + product cards with affiliate links
 
 ## Running
 ```
@@ -57,10 +68,24 @@ python app.py
 ```
 Server runs on port 5000.
 
-## Required Configuration
-**Set `ANTHROPIC_API_KEY` in Replit Secrets** (get from console.anthropic.com):
-1. Click "Secrets" in the Replit sidebar
-2. Add new secret: `ANTHROPIC_API_KEY` = your API key
-3. Restart the app
+## Configuration
 
-Without this, the chat will return an error about authentication.
+### Required (Already Set ✅)
+- **ANTHROPIC_API_KEY** — Enables Claude chat (configured)
+
+### Optional (For Real-Time Walmart API Search)
+To enable SEARCH: fallback, configure these in Replit Secrets:
+- **WALMART_API_PUBLIC_KEY** — From Walmart Developer Portal
+- **WALMART_API_PRIVATE_KEY** — From Walmart Developer Portal
+- **IMPACT_ACCOUNT_SID** — From Impact.com dashboard
+- **IMPACT_AUTH_TOKEN** — From Impact.com dashboard
+- **CRAWLBASE_JS_TOKEN** — From Crawlbase dashboard (for Amazon scraping)
+
+**Current Status:** Hot Score products work fully. API search will activate once keys are added.
+
+## Files
+
+- `app.py` — Flask server with chat endpoint + product resolver initialization
+- `product_api.py` — ProductResolver class + Walmart/Crawlbase/Impact API integrations
+- `index.html` — Frontend with product cards UI
+- `pyproject.toml` — Dependencies: anthropic, flask, gunicorn, requests, beautifulsoup4, lxml

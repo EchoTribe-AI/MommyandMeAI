@@ -1,25 +1,25 @@
-import os
-from flask import Flask, send_from_directory, request, jsonify
-import anthropic
+# This shows ONLY the changes needed to your current app.py
+# Copy the sections below and integrate them into your existing app.py
+
+# ═══════════════════════════════════════════════════
+# SECTION 1: ADD TO TOP OF FILE (after other imports)
+# ═══════════════════════════════════════════════════
+
 from product_api import ProductResolver, detect_category
 
-app = Flask(__name__)
 
-# Product catalog matching the frontend
-PRODUCTS = [
-    {'id': 0, 'name': 'Barbie Dreamhouse Pool Party 75+ Pieces', 'price': '$179', 'was': '$210', 'retailer': 'Amazon', 'emoji': '🏠', 'link': 'https://amazon.com/dp/B0C...?tag=mommymedeals-20'},
-    {'id': 1, 'name': '2026 Glitter Dumpling Squishy Toy', 'price': '$13.49', 'was': '', 'retailer': 'Amazon', 'emoji': '✨', 'link': 'https://amazon.com/dp/B0D...?tag=mommymedeals-20'},
-    {'id': 2, 'name': 'Ms. Rachel Toddler Hoodie + Jogger Set', 'price': '$7.00', 'was': '$15.98', 'retailer': 'Walmart', 'emoji': '🧸', 'link': 'https://goto.walmart.com/ZVboz1'},
-    {'id': 3, 'name': 'Melissa & Doug Steering Wheel Dashboard', 'price': '$28', 'was': '', 'retailer': 'Amazon', 'emoji': '🚗', 'link': 'https://amazon.com/dp/B0A...?tag=mommymedeals-20'},
-    {'id': 4, 'name': 'Stanley Quencher 40oz Tumbler', 'price': '$35', 'was': '$45', 'retailer': 'Amazon', 'emoji': '🥤', 'link': 'https://amazon.com/dp/B09...?tag=mommymedeals-20'},
-    {'id': 5, 'name': 'Moana 2 Kids Underwear 7-Pack', 'price': '$10', 'was': '', 'retailer': 'Amazon', 'emoji': '🌊', 'link': 'https://amazon.com/dp/B0E...?tag=mommymedeals-20'},
-    {'id': 6, 'name': 'Imaginext Jurassic World Dinosaur Set', 'price': '$35', 'was': '$49', 'retailer': 'Walmart', 'emoji': '🦕', 'link': 'https://goto.walmart.com/'},
-    {'id': 7, 'name': 'Sol de Janeiro Travel Fragrance Set', 'price': '$32', 'was': '', 'retailer': 'Ulta', 'emoji': '🌸', 'link': 'https://www.ulta.com/...?PID=1390'},
-    {'id': 8, 'name': 'Kinetic Sand Deluxe Gift Bag', 'price': '$14', 'was': '', 'retailer': 'Target', 'emoji': '⏳', 'link': 'https://target.com/'},
-    {'id': 9, 'name': 'Keter Plastic Storage Box 55-Gallon', 'price': '$39', 'was': '$55', 'retailer': 'Wayfair', 'emoji': '📦', 'link': 'https://wayfair.com/'},
-]
+# ═══════════════════════════════════════════════════
+# SECTION 2: ADD AFTER PRODUCTS ARRAY (around line 20)
+# ═══════════════════════════════════════════════════
 
+# Initialize product resolver
 product_resolver = ProductResolver(PRODUCTS)
+
+
+# ═══════════════════════════════════════════════════
+# SECTION 3: UPDATE SYSTEM_PROMPT
+# Replace the existing SYSTEM_PROMPT with this version
+# ═══════════════════════════════════════════════════
 
 SYSTEM_PROMPT = """You are Steph, the creator behind @EverydaywithSteph and the Mommy & Me Collective. You talk mom-to-mom: warm, enthusiastic, concise, and occasionally use light emojis (but not excessively). You share deals and product recommendations like a trusted friend who happens to know every sale happening right now.
 
@@ -68,6 +68,12 @@ SEARCH: home decor budget"
 
 Always include PRODUCTS: line if you mention specific items by name, or SEARCH: if you need to find products."""
 
+
+# ═══════════════════════════════════════════════════
+# SECTION 4: UPDATE THE /api/chat ENDPOINT
+# Replace the entire chat() function with this version
+# ═══════════════════════════════════════════════════
+
 @app.route('/api/chat', methods=['POST'])
 def chat():
     data = request.get_json(silent=True) or {}
@@ -90,28 +96,34 @@ def chat():
         text_reply = reply
         
         if 'PRODUCTS:' in reply:
+            # Claude referenced specific Hot Score products
             parts = reply.split('PRODUCTS:')
             text_reply = parts[0].strip()
             product_ids_str = parts[1].strip()
             
+            # Extract product IDs (comma-separated integers)
             try:
                 product_ids = [int(pid.strip()) for pid in product_ids_str.split(',')]
                 products = [PRODUCTS[pid] for pid in product_ids if 0 <= pid < len(PRODUCTS)]
             except (ValueError, IndexError):
-                pass
+                pass  # If parsing fails, just return text without products
         
         elif 'SEARCH:' in reply:
+            # Claude needs to search via APIs
             parts = reply.split('SEARCH:')
             text_reply = parts[0].strip()
             search_query = parts[1].strip()
             
+            # Detect category from query
             category = detect_category(search_query)
             
+            # Use product resolver to find products
             try:
                 resolved_products = product_resolver.resolve(search_query, category, max_results=3)
                 products = resolved_products
             except Exception as e:
                 print(f"Product resolution error: {e}")
+                # Fallback to empty products array
                 products = []
         
         return jsonify({
@@ -121,21 +133,7 @@ def chat():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/')
-def index():
-    return send_from_directory('.', 'index.html')
 
-@app.route('/plan')
-def plan():
-    return send_from_directory('.', 'steph-ai-plan.html')
-
-@app.route('/architecture')
-def architecture():
-    return send_from_directory('.', 'steph-architecture.html')
-
-@app.route('/connections')
-def connections():
-    return send_from_directory('.', 'steph-connection-map.html')
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
+# ═══════════════════════════════════════════════════
+# That's it! The rest of app.py stays the same.
+# ═══════════════════════════════════════════════════
