@@ -372,6 +372,19 @@ class ArcherAPI:
                 clicked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS campaigns (
+                slug TEXT PRIMARY KEY,
+                campaign_type TEXT DEFAULT 'organic',
+                routing TEXT DEFAULT 'landing',
+                products_json TEXT,
+                variants_json TEXT,
+                spend_budget REAL DEFAULT 0,
+                forecast_roas TEXT,
+                status TEXT DEFAULT 'draft',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
         conn.close()
 

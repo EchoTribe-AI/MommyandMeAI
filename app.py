@@ -2,7 +2,7 @@ import os
 import json
 import sqlite3
 import requests as req
-from flask import Flask, send_from_directory, request, jsonify, render_template
+from flask import Flask, send_from_directory, request, jsonify, render_template, Response
 import anthropic
 from product_api import ProductResolver, detect_category
 
@@ -413,6 +413,147 @@ def archer_track_click():
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
+
+@app.route('/archer/image_proxy')
+def archer_image_proxy():
+    """Proxy an image URL so the browser can download it without CORS issues."""
+    url = request.args.get('url', '').strip()
+    filename = request.args.get('filename', 'product.jpg')
+    if not url or not url.startswith('http'):
+        return jsonify({'error': 'invalid url'}), 400
+    try:
+        r = req.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        r.raise_for_status()
+        content_type = r.headers.get('Content-Type', 'image/jpeg')
+        return Response(
+            r.content,
+            headers={
+                'Content-Type': content_type,
+                'Content-Disposition': f'attachment; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/archer/ads')
+def archer_ads():
+    return render_template('archer_ads.html')
+
+@app.route('/archer/generate_ad_copy', methods=['POST'])
+def archer_generate_ad_copy():
+    from product_api import ArcherAPI
+    data = request.get_json() or {}
+    products = data.get('products', '')
+    campaign_type = data.get('campaign_type', 'organic Facebook post')
+    routing = data.get('routing', 'a shoppable landing page')
+    slug = data.get('slug', '')
+    product_asins = data.get('product_asins', [])
+
+    try:
+        client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+        message = client.messages.create(
+            model='claude-sonnet-4-6',
+            max_tokens=800,
+            system="""You are writing ad copy for Steph (@EverydaywithSteph / Mommy & Me Collective).
+Steph's voice: warm, enthusiastic, mom-to-mom, like texting your best friend about a deal.
+Light emoji use. Direct and honest. Always mentions the deal or price.
+
+Return ONLY valid JSON — no preamble, no markdown, no backticks.
+Format: {"variants": [{"headline": "...", "primary_text": "...", "cta": "..."}, ...]}
+Generate exactly 3 variants. Each should have a different angle:
+- Variant A: deal/price focused
+- Variant B: product benefit focused
+- Variant C: social proof / mom recommendation angle
+Keep headlines under 40 chars. Primary text 2-3 sentences max.""",
+            messages=[{
+                "role": "user",
+                "content": f"Write 3 ad copy variants for a {campaign_type} linking to {routing}. Products: {products}"
+            }]
+        )
+
+        raw = message.content[0].text.strip().replace('```json', '').replace('```', '').strip()
+        parsed = json.loads(raw)
+        variants = parsed.get('variants', [])
+
+        # Generate attribution links using actual selected product ASINs
+        a = ArcherAPI()
+        asin = product_asins[0] if product_asins else None
+        for i, v in enumerate(variants):
+            label = f"steph-{slug}-var{['a','b','c'][i]}"
+            if asin:
+                link = a.generate_link(asin, label=label)
+                if link:
+                    v['attribution_url'] = link.get('attribution_link') or link.get('url') or ''
+                    v['label'] = label
+
+        return jsonify({'variants': variants})
+
+    except Exception as e:
+        logging.error(f"[ADS] Ad copy generation failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/archer/ads/save', methods=['POST'])
+def archer_save_campaign():
+    from product_api import ArcherAPI
+    data = request.get_json() or {}
+    slug = data.get('slug', '').strip()
+    if not slug:
+        return jsonify({'error': 'slug required'}), 400
+
+    a = ArcherAPI()
+    products = data.get('products', [])
+    variants = data.get('variants', [])
+    for i, v in enumerate(variants):
+        if not v.get('attribution_url') and products:
+            asin = products[0].get('asin', '')
+            if asin:
+                label = f"steph-{slug}-var{['a','b','c'][i]}-{asin.lower()}"
+                link = a.generate_link(asin, label=label)
+                if link:
+                    v['attribution_url'] = link.get('attribution_link') or link.get('url') or ''
+                    v['label'] = label
+
+    conn = sqlite3.connect(a.CACHE_DB)
+    conn.execute("""
+        INSERT OR REPLACE INTO campaigns
+        (slug, campaign_type, routing, products_json, variants_json, spend_budget, forecast_roas, status, created_at)
+        VALUES (?,?,?,?,?,?,?,'draft',CURRENT_TIMESTAMP)
+    """, (
+        slug,
+        data.get('campaign_type', 'organic'),
+        data.get('routing', 'landing'),
+        json.dumps(products),
+        json.dumps(variants),
+        data.get('spend_budget', 0),
+        data.get('forecast_roas', '')
+    ))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True, 'slug': slug})
+
+@app.route('/archer/ads/campaigns')
+def archer_list_campaigns():
+    from product_api import ArcherAPI
+    a = ArcherAPI()
+    conn = sqlite3.connect(a.CACHE_DB)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT slug, campaign_type, routing, products_json, forecast_roas, status, created_at FROM campaigns ORDER BY created_at DESC LIMIT 20"
+    ).fetchall()
+    conn.close()
+    campaigns = []
+    for r in rows:
+        products = json.loads(r['products_json'] or '[]')
+        campaigns.append({
+            'slug': r['slug'],
+            'campaign_type': r['campaign_type'],
+            'routing': r['routing'],
+            'product_count': len(products),
+            'forecast_roas': r['forecast_roas'] or '—',
+            'status': r['status'] or 'draft',
+            'created_at': r['created_at'][:10] if r['created_at'] else ''
+        })
+    return jsonify({'campaigns': campaigns})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
