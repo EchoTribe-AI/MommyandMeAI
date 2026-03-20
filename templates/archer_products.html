@@ -347,6 +347,7 @@
   window.onload = async () => {
     renderSkeletons('matched-loading', 12);
     await loadMatchedProducts();
+    await loadCatalogPage(1);
   };
 
   // ── API CALLS ─────────────────────────────────────────
@@ -363,6 +364,20 @@
     } catch(e) {
       console.error('Failed to load matched products:', e);
       document.getElementById('matched-grid').innerHTML = '<div class="empty-state"><div class="es-icon">⚠️</div><div class="es-text">Could not load products. Check API connection.</div></div>';
+    }
+  }
+
+  async function loadCatalogPage(page = 1) {
+    try {
+      const res = await fetch(`/archer/search?q=&limit=24&page=${page}`);
+      const data = await res.json();
+      state.catalogResults = data.products || [];
+      document.getElementById('catalog-count').textContent = state.catalogResults.length;
+      document.getElementById('catalog-section').style.display = 'block';
+      document.getElementById('catalog-divider').style.display = 'block';
+      renderCatalogGrid();
+    } catch(e) {
+      console.error('Failed to load catalog page:', e);
     }
   }
 
@@ -507,7 +522,10 @@
       ${isMatched ? '<div class="pc-matched-badge">✓ Matched</div>' : ''}
       <div class="pc-check">${isSelected || isLinked ? '✓' : ''}</div>
       <div class="pc-image">
-        <div class="pc-image-placeholder">📦</div>
+        ${p.image_encoded_string ?
+          `<img src="${p.image_encoded_string}" alt="${escStr(name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+           <div class="pc-image-placeholder" style="display:none">📦</div>`
+          : '<div class="pc-image-placeholder">📦</div>'}
       </div>
       <div class="pc-body">
         <div class="pc-brand">${escStr(brand)}</div>

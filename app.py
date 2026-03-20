@@ -208,6 +208,16 @@ def archer_search():
         results = [p for p in results if float((p.get('commission_payout') or '0').replace('%', '') or 0) >= min_commission]
     return jsonify({'products': results})
 
+@app.route('/archer/backfill_images')
+def archer_backfill_images():
+    """One-time route to populate image URLs for matched ASINs."""
+    from product_api import ArcherAPI
+    a = ArcherAPI()
+    matched = a._load_matched_json()
+    asins = [p['asin'] for p in matched]
+    updated = a.backfill_images(asins)
+    return jsonify({'updated': updated, 'total': len(asins)})
+
 @app.route('/archer/generate_link', methods=['POST'])
 def archer_generate_link():
     """Generate a live Archer attribution link for a given ASIN."""

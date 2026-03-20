@@ -487,6 +487,33 @@ class ArcherAPI:
         conn.close()
         return [dict(r) for r in rows]
 
+    def backfill_images(self, asins):
+        """Fetch live product data for a list of ASINs and update image URLs in cache."""
+        conn = sqlite3.connect(self.CACHE_DB)
+        updated = 0
+        for asin in asins:
+            try:
+                r = requests.get(f"{self.ARCHER_BASE}/get_single_product",
+                    headers=self._headers(),
+                    params={"asin": asin},
+                    timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    img = data.get("image_encoded_string", "")
+                    if img:
+                        conn.execute(
+                            "UPDATE products SET image_encoded_string=? WHERE asin=?",
+                            (img, asin)
+                        )
+                        updated += 1
+                time.sleep(0.2)
+            except Exception as e:
+                logging.warning(f"[ARCHER] Image backfill failed for {asin}: {e}")
+        conn.commit()
+        conn.close()
+        logging.info(f"[ARCHER] Image backfill complete: {updated}/{len(asins)} updated")
+        return updated
+
     def _load_matched_json(self):
         """Load matched_asins.json as a list of dicts."""
         try:
