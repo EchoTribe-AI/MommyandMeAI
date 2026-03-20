@@ -487,6 +487,14 @@ class ArcherAPI:
         conn.close()
         return [dict(r) for r in rows]
 
+    def _load_matched_json(self):
+        """Load matched_asins.json as a list of dicts."""
+        try:
+            with open(self.MATCHED_ASINS_PATH, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return []
+
     def get_by_asin(self, asin):
         conn = sqlite3.connect(self.CACHE_DB)
         conn.row_factory = sqlite3.Row

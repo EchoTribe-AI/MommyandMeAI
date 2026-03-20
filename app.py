@@ -1,5 +1,5 @@
 import os
-from flask import Flask, send_from_directory, request, jsonify
+from flask import Flask, send_from_directory, request, jsonify, render_template
 import anthropic
 from product_api import ProductResolver, detect_category
 
@@ -179,6 +179,49 @@ def architecture():
 @app.route('/connections')
 def connections():
     return send_from_directory('.', 'steph-connection-map.html')
+
+@app.route('/archer/products')
+def archer_products():
+    return render_template('archer_products.html')
+
+@app.route('/archer/matched')
+def archer_matched():
+    """Return all 217 matched ASINs from the SQLite cache."""
+    from product_api import ArcherAPI
+    a = ArcherAPI()
+    products = a.get_by_asins([p['asin'] for p in a._load_matched_json()])
+    if not products:
+        products = a._load_matched_json()
+    return jsonify({'products': products})
+
+@app.route('/archer/search')
+def archer_search():
+    """Search the Archer catalog SQLite cache."""
+    from product_api import ArcherAPI
+    q = request.args.get('q', '')
+    category = request.args.get('category', '')
+    min_commission = int(request.args.get('min_commission', 0))
+    limit = int(request.args.get('limit', 24))
+    a = ArcherAPI()
+    results = a.search_catalog(q, category=category or None, limit=limit)
+    if min_commission > 0:
+        results = [p for p in results if float((p.get('commission_payout') or '0').replace('%', '') or 0) >= min_commission]
+    return jsonify({'products': results})
+
+@app.route('/archer/generate_link', methods=['POST'])
+def archer_generate_link():
+    """Generate a live Archer attribution link for a given ASIN."""
+    from product_api import ArcherAPI
+    data = request.get_json() or {}
+    asin = data.get('asin', '').strip()
+    label = data.get('label', asin)
+    if not asin:
+        return jsonify({'error': 'asin is required'}), 400
+    a = ArcherAPI()
+    result = a.generate_link(asin, label=label)
+    if not result:
+        return jsonify({'error': 'Link generation failed'}), 500
+    return jsonify(result)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
