@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Collage Builder — EchoTribe</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #f7f7f5; --bg2: #efefec; --surface: #fff; --surface2: #f2f2ef;
+    --text: #1a1a17; --text2: #3c3c38; --text3: #606058; --text4: #999890;
+    --border: rgba(0,0,0,0.09); --border2: rgba(0,0,0,0.15);
+    --blue: #1c5fa6; --blue-mid: #2e7dd4; --blue-light: #e8f2fc; --blue-text: #0f4a8a;
+    --green: #27693a; --green-light: #e6f4eb;
+    --amber: #8a5510; --amber-light: #fbeedd;
+    --red: #a02828; --red-light: #fbe9e9;
+    --teal: #0a6b52; --teal-light: #e2f5ee;
+    --archer: #e85d26; --archer-light: #fdf0ea;
+    --r: 8px; --rlg: 12px;
+    --sans: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    --mono: 'SF Mono', 'Fira Mono', monospace;
+    --topbar: 56px;
+  }
+  body { font-family: var(--sans); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+
+  /* TOPBAR */
+  .topbar { position: fixed; top: 0; left: 0; right: 0; height: var(--topbar); background: var(--surface); border-bottom: 0.5px solid var(--border2); display: flex; align-items: center; padding: 0 20px; gap: 16px; z-index: 100; }
+  .tb-logo { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
+  .tb-logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--archer); }
+  .tb-divider { width: 0.5px; height: 20px; background: var(--border2); }
+  .tb-page { font-size: 13px; color: var(--text3); }
+  .tb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .tb-link { font-size: 12px; color: var(--text4); text-decoration: none; padding: 5px 10px; border: 0.5px solid var(--border2); border-radius: var(--r); background: var(--surface); transition: all 0.15s; }
+  .tb-link:hover { background: var(--bg2); color: var(--text2); }
+
+  /* LAYOUT */
+  .layout { display: grid; grid-template-columns: 1fr 420px; min-height: 100vh; padding-top: var(--topbar); gap: 0; }
+
+  /* LEFT — BUILDER */
+  .builder { padding: 24px; overflow-y: auto; }
+
+  .section-label { font-family: var(--mono); font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--text4); margin-bottom: 10px; margin-top: 24px; }
+  .section-label:first-child { margin-top: 0; }
+
+  /* PRODUCT SLOTS */
+  .slots-grid { display: grid; gap: 10px; margin-bottom: 8px; }
+  .slots-grid.layout-2 { grid-template-columns: 1fr 1fr; }
+  .slots-grid.layout-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .slots-grid.layout-4 { grid-template-columns: 1fr 1fr; }
+  .slots-grid.layout-featured { grid-template-columns: 2fr 1fr; }
+  .slots-grid.layout-featured .slot:first-child { grid-row: span 2; }
+
+  .slot { background: var(--surface); border: 1.5px dashed var(--border2); border-radius: var(--rlg); min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; position: relative; overflow: hidden; }
+  .slot:hover { border-color: var(--archer); background: var(--archer-light); }
+  .slot.filled { border-style: solid; border-color: var(--border); cursor: default; }
+  .slot.filled:hover { border-color: var(--border2); background: var(--surface); }
+  .slot-empty-icon { font-size: 24px; margin-bottom: 6px; color: var(--text4); }
+  .slot-empty-text { font-size: 11px; color: var(--text4); text-align: center; line-height: 1.4; }
+
+  .slot-img { width: 100%; height: 120px; object-fit: cover; border-radius: var(--r) var(--r) 0 0; }
+  .slot-img-placeholder { width: 100%; height: 120px; background: var(--bg2); display: flex; align-items: center; justify-content: center; font-size: 28px; border-radius: var(--r) var(--r) 0 0; }
+  .slot-info { padding: 8px 10px; width: 100%; }
+  .slot-brand { font-family: var(--mono); font-size: 9px; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text4); }
+  .slot-name { font-size: 11px; font-weight: 500; color: var(--text); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; }
+  .slot-price { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--text); margin-top: 4px; }
+  .slot-commission { font-family: var(--mono); font-size: 10px; color: var(--green); }
+  .slot-remove { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,0.5); color: #fff; border: none; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s; }
+  .slot.filled:hover .slot-remove { opacity: 1; }
+  .slot-direct-badge { position: absolute; top: 6px; left: 6px; font-family: var(--mono); font-size: 9px; background: var(--blue-mid); color: #fff; padding: 2px 6px; border-radius: 4px; }
+
+  /* ADD PRODUCT */
+  .add-product-bar { display: flex; gap: 8px; margin-bottom: 8px; }
+  .add-input { flex: 1; border: 0.5px solid var(--border2); border-radius: var(--r); padding: 8px 12px; font-size: 13px; font-family: var(--sans); color: var(--text); background: var(--bg); outline: none; transition: border-color 0.15s; }
+  .add-input:focus { border-color: var(--blue-mid); background: var(--surface); }
+  .add-btn { font-family: var(--sans); font-size: 12px; font-weight: 500; padding: 8px 14px; border-radius: var(--r); border: 0.5px solid var(--border2); background: var(--surface); color: var(--text2); cursor: pointer; white-space: nowrap; transition: all 0.15s; }
+  .add-btn:hover { background: var(--bg2); }
+  .add-btn.primary { background: var(--archer); color: #fff; border-color: var(--archer); }
+  .add-btn.primary:hover { background: #d04d1c; }
+
+  .search-results { background: var(--surface); border: 0.5px solid var(--border2); border-radius: var(--r); max-height: 220px; overflow-y: auto; margin-bottom: 8px; display: none; }
+  .search-results.visible { display: block; }
+  .sr-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 0.5px solid var(--border); cursor: pointer; transition: background 0.1s; }
+  .sr-item:last-child { border-bottom: none; }
+  .sr-item:hover { background: var(--bg2); }
+  .sri-img { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; background: var(--bg2); flex-shrink: 0; }
+  .sri-info { flex: 1; min-width: 0; }
+  .sri-name { font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sri-meta { font-size: 11px; color: var(--text4); margin-top: 1px; }
+  .sri-comm { font-family: var(--mono); font-size: 11px; color: var(--green); flex-shrink: 0; }
+
+  /* LAYOUT PICKER */
+  .layout-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .lp-option { border: 1.5px solid var(--border2); border-radius: var(--r); padding: 8px 12px; cursor: pointer; transition: all 0.15s; background: var(--surface); display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .lp-option:hover { border-color: var(--archer); }
+  .lp-option.active { border-color: var(--archer); background: var(--archer-light); }
+  .lp-icon { font-size: 18px; }
+  .lp-label { font-size: 10px; color: var(--text3); white-space: nowrap; }
+  .lp-option.active .lp-label { color: var(--archer); font-weight: 500; }
+
+  /* THEME PICKER */
+  .theme-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tp-option { width: 44px; height: 44px; border-radius: var(--r); border: 2px solid transparent; cursor: pointer; transition: all 0.15s; position: relative; }
+  .tp-option.active { border-color: var(--text); }
+  .tp-option:hover { transform: scale(1.05); }
+
+  /* CAPTION */
+  .caption-area { position: relative; }
+  .caption-textarea { width: 100%; border: 0.5px solid var(--border2); border-radius: var(--r); padding: 10px 12px; font-size: 13px; font-family: var(--sans); color: var(--text); background: var(--bg); outline: none; resize: vertical; min-height: 100px; line-height: 1.6; transition: border-color 0.15s; }
+  .caption-textarea:focus { border-color: var(--blue-mid); background: var(--surface); }
+  .caption-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .caption-gen-btn { font-size: 12px; font-weight: 500; padding: 7px 14px; border-radius: var(--r); border: 0.5px solid var(--archer); background: var(--archer-light); color: var(--archer); cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 5px; }
+  .caption-gen-btn:hover { background: var(--archer); color: #fff; }
+  .caption-gen-btn.loading { opacity: 0.6; cursor: wait; }
+
+  /* DIRECT TOGGLE */
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--r); padding: 10px 14px; margin-bottom: 8px; }
+  .toggle-info { }
+  .toggle-title { font-size: 13px; font-weight: 500; color: var(--text); }
+  .toggle-sub { font-size: 11px; color: var(--text4); margin-top: 2px; }
+  .toggle-switch { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider { position: absolute; inset: 0; background: var(--bg2); border-radius: 22px; cursor: pointer; transition: 0.2s; border: 0.5px solid var(--border2); }
+  .toggle-slider:before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  input:checked + .toggle-slider { background: var(--archer); border-color: var(--archer); }
+  input:checked + .toggle-slider:before { transform: translateX(18px); }
+
+  /* SLUG */
+  .slug-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .slug-prefix { font-size: 12px; color: var(--text4); white-space: nowrap; }
+  .slug-input { flex: 1; border: 0.5px solid var(--border2); border-radius: var(--r); padding: 7px 10px; font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg); outline: none; transition: border-color 0.15s; }
+  .slug-input:focus { border-color: var(--blue-mid); }
+
+  /* SAVE BAR */
+  .save-bar { position: sticky; bottom: 0; background: var(--surface); border-top: 0.5px solid var(--border); padding: 12px 24px; display: flex; gap: 8px; align-items: center; margin: 0 -24px; }
+  .save-btn { font-family: var(--sans); font-size: 13px; font-weight: 500; padding: 9px 20px; border-radius: var(--r); border: 0.5px solid; cursor: pointer; transition: all 0.15s; }
+  .save-btn.primary { background: var(--archer); color: #fff; border-color: var(--archer); }
+  .save-btn.primary:hover { background: #d04d1c; }
+  .save-btn.outline { background: var(--surface); color: var(--text2); border-color: var(--border2); }
+  .save-btn.outline:hover { background: var(--bg2); }
+  .save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .save-status { font-size: 12px; color: var(--text4); margin-left: auto; }
+
+  /* RIGHT — PREVIEW */
+  .preview-panel { background: var(--surface2); border-left: 0.5px solid var(--border); position: sticky; top: var(--topbar); height: calc(100vh - var(--topbar)); overflow-y: auto; display: flex; flex-direction: column; }
+  .pp-head { padding: 16px 20px; border-bottom: 0.5px solid var(--border); background: var(--surface); }
+  .pp-title { font-size: 13px; font-weight: 500; color: var(--text); }
+  .pp-sub { font-size: 11px; color: var(--text4); margin-top: 2px; }
+  .pp-body { padding: 16px; flex: 1; }
+  .pp-url { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--r); padding: 8px 12px; margin-bottom: 12px; }
+  .pp-url-text { font-family: var(--mono); font-size: 11px; color: var(--text2); flex: 1; word-break: break-all; }
+  .pp-copy-btn { font-size: 11px; color: var(--blue-mid); background: none; border: none; cursor: pointer; white-space: nowrap; padding: 2px 6px; border-radius: 4px; transition: background 0.15s; }
+  .pp-copy-btn:hover { background: var(--blue-light); }
+
+  /* MOBILE PREVIEW */
+  .mobile-frame { background: var(--bg); border-radius: 16px; border: 1.5px solid var(--border2); overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.1); max-width: 320px; margin: 0 auto; }
+  .mf-status { background: #fff; padding: 8px 16px 6px; display: flex; justify-content: space-between; align-items: center; }
+  .mf-time { font-size: 11px; font-weight: 600; color: var(--text); }
+  .mf-icons { font-size: 11px; color: var(--text3); }
+  .mf-header { padding: 12px 16px 10px; background: #fff; border-bottom: 0.5px solid var(--border); }
+  .mf-brand { font-size: 13px; font-weight: 600; color: var(--text); }
+  .mf-tagline { font-size: 11px; color: var(--text4); margin-top: 2px; }
+  .mf-content { padding: 12px 16px; }
+  .mf-caption { font-size: 12px; color: var(--text2); line-height: 1.6; margin-bottom: 12px; white-space: pre-wrap; }
+  .mf-products { display: grid; gap: 8px; }
+  .mf-products.grid-2 { grid-template-columns: 1fr 1fr; }
+  .mf-products.grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .mf-product { background: #fff; border-radius: 8px; overflow: hidden; border: 0.5px solid var(--border); }
+  .mfp-img { width: 100%; height: 80px; object-fit: cover; background: var(--bg2); display: flex; align-items: center; justify-content: center; font-size: 20px; }
+  .mfp-img img { width: 100%; height: 100%; object-fit: cover; }
+  .mfp-body { padding: 6px 8px; }
+  .mfp-name { font-size: 10px; font-weight: 500; color: var(--text); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .mfp-price { font-family: var(--mono); font-size: 11px; color: var(--archer); font-weight: 600; margin-top: 3px; }
+  .mfp-btn { width: 100%; padding: 5px; font-size: 10px; font-weight: 600; text-align: center; cursor: pointer; border: none; color: #fff; margin-top: 4px; border-radius: 4px; }
+
+  /* EXISTING COLLAGES */
+  .collage-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .collage-item { background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--r); padding: 10px 14px; display: flex; align-items: center; gap: 10px; }
+  .ci-info { flex: 1; }
+  .ci-name { font-size: 12.5px; font-weight: 500; color: var(--text); }
+  .ci-meta { font-size: 11px; color: var(--text4); margin-top: 2px; font-family: var(--mono); }
+  .ci-actions { display: flex; gap: 6px; }
+  .ci-btn { font-size: 11px; padding: 4px 10px; border-radius: 4px; border: 0.5px solid var(--border2); background: var(--surface); color: var(--text3); cursor: pointer; transition: all 0.15s; }
+  .ci-btn:hover { background: var(--bg2); }
+  .ci-btn.open { color: var(--blue-mid); border-color: rgba(46,125,212,0.3); background: var(--blue-light); }
+
+  /* TOAST */
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--text); color: #fff; font-size: 13px; padding: 10px 18px; border-radius: var(--r); opacity: 0; transition: all 0.25s; z-index: 200; white-space: nowrap; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .preview-panel { position: static; height: auto; border-left: none; border-top: 0.5px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="tb-logo"><div class="tb-logo-dot"></div>EchoTribe</div>
+  <div class="tb-divider"></div>
+  <div class="tb-page">Collage Builder</div>
+  <div class="tb-right">
+    <a href="/archer/products" class="tb-link">← Products</a>
+    <a href="/" class="tb-link">Chat</a>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- BUILDER LEFT -->
+  <div class="builder">
+
+    <!-- ADD PRODUCTS -->
+    <div class="section-label">Products <span id="slot-count" style="color:var(--text4);font-size:10px;font-weight:400;">(0/6)</span></div>
+
+    <div class="add-product-bar">
+      <input type="text" class="add-input" id="add-input" placeholder="Search by name, brand, ASIN, or paste Amazon URL..." oninput="handleAddInput(this.value)">
+      <button class="add-btn primary" onclick="lookupFromInput()">Add</button>
+    </div>
+    <div class="search-results" id="search-results"></div>
+
+    <!-- SLOTS -->
+    <div class="slots-grid layout-2" id="slots-grid">
+      <!-- slots injected by JS -->
+    </div>
+
+    <!-- LAYOUT PICKER -->
+    <div class="section-label">Layout</div>
+    <div class="layout-picker">
+      <div class="lp-option active" onclick="setLayout('layout-2')" data-layout="layout-2">
+        <div class="lp-icon">▣▣</div><div class="lp-label">2 columns</div>
+      </div>
+      <div class="lp-option" onclick="setLayout('layout-3')" data-layout="layout-3">
+        <div class="lp-icon">▣▣▣</div><div class="lp-label">3 columns</div>
+      </div>
+      <div class="lp-option" onclick="setLayout('layout-4')" data-layout="layout-4">
+        <div class="lp-icon">⊞</div><div class="lp-label">2×2 grid</div>
+      </div>
+      <div class="lp-option" onclick="setLayout('layout-featured')" data-layout="layout-featured">
+        <div class="lp-icon">◧▣</div><div class="lp-label">Featured</div>
+      </div>
+    </div>
+
+    <!-- THEME PICKER -->
+    <div class="section-label">Theme</div>
+    <div class="theme-picker" id="theme-picker">
+      <div class="tp-option active" onclick="setTheme('coral', this)" style="background:linear-gradient(135deg,#ff6b6b,#ffa500)" title="Coral"></div>
+      <div class="tp-option" onclick="setTheme('ocean', this)" style="background:linear-gradient(135deg,#2e7dd4,#0a6b52)" title="Ocean"></div>
+      <div class="tp-option" onclick="setTheme('lavender', this)" style="background:linear-gradient(135deg,#a78bfa,#ec4899)" title="Lavender"></div>
+      <div class="tp-option" onclick="setTheme('forest', this)" style="background:linear-gradient(135deg,#27693a,#8a5510)" title="Forest"></div>
+      <div class="tp-option" onclick="setTheme('midnight', this)" style="background:linear-gradient(135deg,#1a1a17,#3c3c38)" title="Midnight"></div>
+      <div class="tp-option" onclick="setTheme('peach', this)" style="background:linear-gradient(135deg,#fbeedd,#fdf0ea)" title="Peach"></div>
+      <div class="tp-option" onclick="setTheme('clean', this)" style="background:#ffffff;border:1.5px solid #ddd" title="Clean"></div>
+      <div class="tp-option" onclick="setTheme('bold', this)" style="background:linear-gradient(135deg,#e85d26,#a02828)" title="Bold"></div>
+    </div>
+
+    <!-- DIRECT TO AMAZON TOGGLE -->
+    <div class="section-label">Traffic Routing</div>
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <div class="toggle-title">Direct to Amazon</div>
+        <div class="toggle-sub">Skip landing page — send ad traffic straight to Amazon product page</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="direct-toggle" onchange="updatePreview()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <!-- CAPTION -->
+    <div class="section-label">Caption</div>
+    <div class="caption-area">
+      <textarea class="caption-textarea" id="caption" placeholder="Write a caption or generate one in Steph's voice..."></textarea>
+      <div class="caption-actions">
+        <button class="caption-gen-btn" id="gen-btn" onclick="generateCaption()">
+          ✨ Generate in Steph's voice
+        </button>
+        <button class="add-btn" onclick="document.getElementById('caption').value = ''">Clear</button>
+      </div>
+    </div>
+
+    <!-- SLUG / URL -->
+    <div class="section-label" style="margin-top:20px;">Landing Page URL</div>
+    <div class="slug-row">
+      <div class="slug-prefix">mommyandmecollective.com/shop/</div>
+      <input type="text" class="slug-input" id="slug-input" placeholder="e.g. beach-toys-apr1" oninput="updatePreview()">
+    </div>
+
+    <!-- SAVE BAR -->
+    <div class="save-bar">
+      <button class="save-btn outline" onclick="resetBuilder()">New Collage</button>
+      <button class="save-btn primary" id="save-btn" onclick="saveCollage()" disabled>Save & Get Link</button>
+      <div class="save-status" id="save-status"></div>
+    </div>
+
+    <!-- EXISTING COLLAGES -->
+    <div class="section-label" style="margin-top:32px;">Saved Collages</div>
+    <div class="collage-list" id="collage-list">
+      <div style="font-size:12px;color:var(--text4);">No collages yet.</div>
+    </div>
+
+  </div>
+
+  <!-- PREVIEW RIGHT -->
+  <div class="preview-panel">
+    <div class="pp-head">
+      <div class="pp-title">Live Preview</div>
+      <div class="pp-sub">Updates as you build</div>
+    </div>
+    <div class="pp-body">
+
+      <div class="pp-url" id="pp-url-bar" style="display:none;">
+        <div class="pp-url-text" id="pp-url-text">—</div>
+        <button class="pp-copy-btn" onclick="copyUrl()">Copy</button>
+      </div>
+
+      <div class="mobile-frame" id="mobile-preview">
+        <div class="mf-status">
+          <div class="mf-time">9:41</div>
+          <div class="mf-icons">▶ ⬟ ▐▐</div>
+        </div>
+        <div class="mf-header">
+          <div class="mf-brand">Mommy & Me Collective</div>
+          <div class="mf-tagline">@EverydaywithSteph • Top picks for you 🛍️</div>
+        </div>
+        <div class="mf-content" id="mf-content">
+          <div class="mf-caption" id="mf-caption" style="color:var(--text4);font-style:italic;">Add products and a caption to preview your landing page...</div>
+          <div class="mf-products grid-2" id="mf-products"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // ── STATE ──────────────────────────────────────────────
+  const MAX_SLOTS = 6;
+  let state = {
+    products: [],       // array of product objects in slots
+    layout: 'layout-2',
+    theme: 'coral',
+    directToAmazon: false,
+    slug: '',
+    caption: '',
+    searchTimer: null,
+    editingId: null     // if editing existing collage
+  };
+
+  const THEMES = {
+    coral:    { bg: '#fff5f5', accent: '#ff6b6b', btn: '#e85d26', text: '#1a1a17' },
+    ocean:    { bg: '#e8f4f8', accent: '#2e7dd4', btn: '#0a6b52', text: '#0f4a8a' },
+    lavender: { bg: '#f5f0ff', accent: '#a78bfa', btn: '#ec4899', text: '#4c1d95' },
+    forest:   { bg: '#f0f7f2', accent: '#27693a', btn: '#8a5510', text: '#1a2e1a' },
+    midnight: { bg: '#1a1a17', accent: '#e8e5dc', btn: '#888780', text: '#e8e5dc' },
+    peach:    { bg: '#fdf6f0', accent: '#e85d26', btn: '#8a5510', text: '#1a1a17' },
+    clean:    { bg: '#ffffff', accent: '#1a1a17', btn: '#2e7dd4', text: '#1a1a17' },
+    bold:     { bg: '#fff8f6', accent: '#e85d26', btn: '#a02828', text: '#1a1a17' },
+  };
+
+  // ── INIT ──────────────────────────────────────────────
+  window.onload = async () => {
+    // Check for pre-selected products passed via URL params
+    const params = new URLSearchParams(window.location.search);
+    const asins = params.get('asins');
+    if (asins) {
+      const asinList = asins.split(',').filter(Boolean).slice(0, MAX_SLOTS);
+      for (const asin of asinList) {
+        await addProductByAsin(asin);
+      }
+    }
+    renderSlots();
+    generateSlug();
+    await loadCollageList();
+  };
+
+  // ── PRODUCT MANAGEMENT ────────────────────────────────
+
+  async function addProductByAsin(asin) {
+    if (state.products.length >= MAX_SLOTS) return;
+    if (state.products.find(p => p.asin === asin)) return;
+    try {
+      const res = await fetch(`/archer/product/${asin}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.product) {
+        state.products.push(data.product);
+        updateSaveBtn();
+        updatePreview();
+      }
+    } catch(e) { console.error('Failed to add product:', e); }
+  }
+
+  function removeProduct(asin) {
+    state.products = state.products.filter(p => p.asin !== asin);
+    renderSlots();
+    updateSaveBtn();
+    updatePreview();
+  }
+
+  async function handleAddInput(val) {
+    clearTimeout(state.searchTimer);
+    const results = document.getElementById('search-results');
+    if (!val || val.length < 2) { results.classList.remove('visible'); return; }
+    state.searchTimer = setTimeout(async () => {
+      // Check if it's an ASIN (10 char alphanumeric) or Amazon URL
+      const asinMatch = val.match(/\b(B0[A-Z0-9]{8}|B[A-Z0-9]{9})\b/i);
+      if (asinMatch) {
+        await lookupAsin(asinMatch[1].toUpperCase());
+        results.classList.remove('visible');
+        return;
+      }
+      // Search
+      const res = await fetch(`/archer/search?q=${encodeURIComponent(val)}&limit=6`);
+      const data = await res.json();
+      if (!data.products?.length) { results.classList.remove('visible'); return; }
+      results.innerHTML = data.products.map(p => `
+        <div class="sr-item" onclick="selectSearchResult('${p.asin || p.ASIN}')">
+          ${p.image_encoded_string
+            ? `<img class="sri-img" src="${p.image_encoded_string}" onerror="this.src='';this.style.background='var(--bg2)'">`
+            : `<div class="sri-img" style="font-size:18px;display:flex;align-items:center;justify-content:center;background:var(--bg2);">📦</div>`
+          }
+          <div class="sri-info">
+            <div class="sri-name">${escStr(p.product_name || p.name || '')}</div>
+            <div class="sri-meta">${p.company_name || p.brand || ''} · ${p.price || ''}</div>
+          </div>
+          <div class="sri-comm">${p.commission_payout || p.commission || ''}</div>
+        </div>`).join('');
+      results.classList.add('visible');
+    }, 300);
+  }
+
+  async function selectSearchResult(asin) {
+    document.getElementById('search-results').classList.remove('visible');
+    document.getElementById('add-input').value = '';
+    await addProductByAsin(asin);
+    renderSlots();
+  }
+
+  async function lookupFromInput() {
+    const val = document.getElementById('add-input').value.trim();
+    if (!val) return;
+    const asinMatch = val.match(/\b(B0[A-Z0-9]{8}|B[A-Z0-9]{9})\b/i);
+    if (asinMatch) {
+      await addProductByAsin(asinMatch[1].toUpperCase());
+      document.getElementById('add-input').value = '';
+      document.getElementById('search-results').classList.remove('visible');
+      renderSlots();
+    }
+  }
+
+  async function lookupAsin(asin) {
+    await addProductByAsin(asin);
+    document.getElementById('add-input').value = '';
+    renderSlots();
+  }
+
+  // ── RENDER ────────────────────────────────────────────
+
+  function renderSlots() {
+    const grid = document.getElementById('slots-grid');
+    grid.className = `slots-grid ${state.layout}`;
+    const count = Math.max(state.products.length + 1, state.layout === 'layout-3' ? 3 : 2);
+    const slots = Math.min(count, MAX_SLOTS);
+    let html = '';
+    for (let i = 0; i < slots; i++) {
+      const p = state.products[i];
+      if (p) {
+        html += `
+        <div class="slot filled" id="slot-${i}">
+          ${state.directToAmazon ? '<div class="slot-direct-badge">→ Amazon</div>' : ''}
+          <button class="slot-remove" onclick="removeProduct('${p.asin}')">✕</button>
+          ${p.image_encoded_string ? `<img class="slot-img" src="${p.image_encoded_string}" onerror="this.style.display='none'">` : `<div class="slot-img-placeholder">📦</div>`}
+          <div class="slot-info">
+            <div class="slot-brand">${escStr(p.company_name || p.brand || '')}</div>
+            <div class="slot-name">${escStr(p.product_name || p.name || '')}</div>
+            <div class="slot-price">${p.price || ''} <span class="slot-commission">${p.commission_payout || p.commission || ''}</span></div>
+          </div>
+        </div>`;
+      } else if (i < MAX_SLOTS) {
+        html += `
+        <div class="slot" onclick="document.getElementById('add-input').focus()">
+          <div class="slot-empty-icon">+</div>
+          <div class="slot-empty-text">Click to add<br>product</div>
+        </div>`;
+      }
+    }
+    grid.innerHTML = html;
+    document.getElementById('slot-count').textContent = `(${state.products.length}/${MAX_SLOTS})`;
+    updateSaveBtn();
+    updatePreview();
+  }
+
+  function updatePreview() {
+    state.directToAmazon = document.getElementById('direct-toggle').checked;
+    state.caption = document.getElementById('caption').value;
+    state.slug = document.getElementById('slug-input').value.trim();
+    const theme = THEMES[state.theme] || THEMES.coral;
+
+    // Mobile preview products
+    const gridClass = state.products.length <= 2 ? 'grid-2' : state.products.length <= 3 ? 'grid-3' : 'grid-2';
+    const mfProducts = document.getElementById('mf-products');
+    mfProducts.className = `mf-products ${gridClass}`;
+    mfProducts.style.background = theme.bg;
+
+    if (state.products.length) {
+      mfProducts.innerHTML = state.products.map(p => `
+        <div class="mf-product">
+          <div class="mfp-img">${p.image_encoded_string ? `<img src="${p.image_encoded_string}" onerror="this.style.display='none'">` : '📦'}</div>
+          <div class="mfp-body">
+            <div class="mfp-name">${escStr((p.product_name || p.name || '').substring(0, 40))}</div>
+            <div class="mfp-price">${p.price || ''}</div>
+          </div>
+          <button class="mfp-btn" style="background:${theme.btn}">
+            ${state.directToAmazon ? 'View on Amazon →' : 'Shop Now →'}
+          </button>
+        </div>`).join('');
+    } else {
+      mfProducts.innerHTML = '';
+    }
+
+    // Caption
+    const captionEl = document.getElementById('mf-caption');
+    if (state.caption) {
+      captionEl.textContent = state.caption;
+      captionEl.style.color = theme.text;
+      captionEl.style.fontStyle = 'normal';
+    } else {
+      captionEl.textContent = 'Add products and a caption to preview...';
+      captionEl.style.color = 'var(--text4)';
+      captionEl.style.fontStyle = 'italic';
+    }
+
+    // Apply theme to mobile frame content
+    document.getElementById('mf-content').style.background = theme.bg;
+
+    // URL bar
+    const urlBar = document.getElementById('pp-url-bar');
+    if (state.slug) {
+      const url = state.directToAmazon && state.products.length === 1
+        ? `amazon.com/dp/${state.products[0].asin}`
+        : `mommyandmecollective.com/shop/${state.slug}`;
+      document.getElementById('pp-url-text').textContent = url;
+      urlBar.style.display = 'flex';
+    } else {
+      urlBar.style.display = 'none';
+    }
+  }
+
+  // ── SETTINGS ──────────────────────────────────────────
+
+  function setLayout(layout) {
+    state.layout = layout;
+    document.querySelectorAll('.lp-option').forEach(el => {
+      el.classList.toggle('active', el.dataset.layout === layout);
+    });
+    renderSlots();
+  }
+
+  function setTheme(theme, el) {
+    state.theme = theme;
+    document.querySelectorAll('.tp-option').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+    updatePreview();
+  }
+
+  function generateSlug() {
+    const date = new Date();
+    const month = date.toLocaleString('default', { month: 'short' }).toLowerCase();
+    const day = date.getDate();
+    document.getElementById('slug-input').value = `steph-picks-${month}${day}`;
+    state.slug = document.getElementById('slug-input').value;
+  }
+
+  // ── CAPTION GENERATION ────────────────────────────────
+
+  async function generateCaption() {
+    if (!state.products.length) { showToast('Add products first'); return; }
+    const btn = document.getElementById('gen-btn');
+    btn.textContent = '✨ Generating...';
+    btn.classList.add('loading');
+    btn.disabled = true;
+
+    const productList = state.products.map(p =>
+      `${p.product_name || p.name} by ${p.company_name || p.brand} at ${p.price}`
+    ).join(', ');
+
+    try {
+      const res = await fetch('/archer/generate_caption', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ products: productList, theme: state.theme })
+      });
+      const data = await res.json();
+      if (data.caption) {
+        document.getElementById('caption').value = data.caption;
+        state.caption = data.caption;
+        updatePreview();
+        showToast('Caption generated!');
+      }
+    } catch(e) {
+      showToast('Caption generation failed');
+    }
+    btn.textContent = '✨ Generate in Steph\'s voice';
+    btn.classList.remove('loading');
+    btn.disabled = false;
+  }
+
+  // ── SAVE / LOAD ───────────────────────────────────────
+
+  function updateSaveBtn() {
+    const btn = document.getElementById('save-btn');
+    btn.disabled = state.products.length === 0;
+  }
+
+  async function saveCollage() {
+    if (!state.products.length) return;
+    const btn = document.getElementById('save-btn');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    const slug = document.getElementById('slug-input').value.trim() || `collage-${Date.now()}`;
+    const payload = {
+      slug,
+      products: state.products,
+      layout: state.layout,
+      theme: state.theme,
+      caption: document.getElementById('caption').value,
+      direct_to_amazon: document.getElementById('direct-toggle').checked
+    };
+
+    try {
+      const res = await fetch('/archer/collage/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.url) {
+        document.getElementById('save-status').textContent = '✓ Saved';
+        copyToClipboard(window.location.origin + data.url);
+        showToast('Saved & URL copied to clipboard!');
+        await loadCollageList();
+      }
+    } catch(e) {
+      showToast('Save failed — check connection');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Save & Get Link';
+  }
+
+  async function loadCollageList() {
+    try {
+      const res = await fetch('/archer/collages');
+      const data = await res.json();
+      const list = document.getElementById('collage-list');
+      if (!data.collages?.length) {
+        list.innerHTML = '<div style="font-size:12px;color:var(--text4);">No collages yet.</div>';
+        return;
+      }
+      list.innerHTML = data.collages.map(c => `
+        <div class="collage-item">
+          <div class="ci-info">
+            <div class="ci-name">${escStr(c.slug)}</div>
+            <div class="ci-meta">${c.product_count} products · ${c.theme} · ${c.created_at}</div>
+          </div>
+          <div class="ci-actions">
+            <button class="ci-btn open" onclick="window.open('/shop/${c.slug}','_blank')">View</button>
+            <button class="ci-btn" onclick="copyToClipboard(window.location.origin+'/shop/${c.slug}');showToast('URL copied!')">Copy</button>
+          </div>
+        </div>`).join('');
+    } catch(e) {}
+  }
+
+  function resetBuilder() {
+    state.products = [];
+    state.caption = '';
+    state.theme = 'coral';
+    state.layout = 'layout-2';
+    document.getElementById('caption').value = '';
+    document.getElementById('direct-toggle').checked = false;
+    document.querySelectorAll('.tp-option').forEach((t,i) => t.classList.toggle('active', i===0));
+    document.querySelectorAll('.lp-option').forEach((l,i) => l.classList.toggle('active', i===0));
+    generateSlug();
+    renderSlots();
+    updatePreview();
+  }
+
+  function copyUrl() {
+    const slug = document.getElementById('slug-input').value.trim();
+    if (!slug) return;
+    const url = `${window.location.origin}/shop/${slug}`;
+    copyToClipboard(url);
+    showToast('URL copied!');
+  }
+
+  // ── UTILITIES ─────────────────────────────────────────
+
+  function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    });
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  function escStr(s) {
+    return (s||'').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  }
+</script>
+</body>
+</html>

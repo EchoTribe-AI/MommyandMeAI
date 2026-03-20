@@ -1,9 +1,25 @@
 import os
+import json
+import sqlite3
+import requests as req
 from flask import Flask, send_from_directory, request, jsonify, render_template
 import anthropic
 from product_api import ProductResolver, detect_category
 
 app = Flask(__name__)
+
+THEMES = {
+    'coral':    {'bg': '#fff5f5', 'accent': '#ff6b6b', 'btn': '#e85d26', 'text': '#1a1a17'},
+    'ocean':    {'bg': '#e8f4f8', 'accent': '#2e7dd4', 'btn': '#0a6b52', 'text': '#0f4a8a'},
+    'lavender': {'bg': '#f5f0ff', 'accent': '#a78bfa', 'btn': '#ec4899', 'text': '#4c1d95'},
+    'forest':   {'bg': '#f0f7f2', 'accent': '#27693a', 'btn': '#8a5510', 'text': '#1a2e1a'},
+    'midnight': {'bg': '#1a1a17', 'accent': '#e8e5dc', 'btn': '#888780', 'text': '#e8e5dc'},
+    'peach':    {'bg': '#fdf6f0', 'accent': '#e85d26', 'btn': '#8a5510', 'text': '#1a1a17'},
+    'clean':    {'bg': '#ffffff', 'accent': '#1a1a17', 'btn': '#2e7dd4', 'text': '#1a1a17'},
+    'bold':     {'bg': '#fff8f6', 'accent': '#e85d26', 'btn': '#a02828', 'text': '#1a1a17'},
+}
+
+PIXEL_ID = os.environ.get('FB_PIXEL_ID', '1559451780790812')
 
 # Product catalog matching the frontend
 PRODUCTS = [
@@ -240,6 +256,163 @@ def archer_generate_link():
     if not result:
         return jsonify({'error': 'Link generation failed'}), 500
     return jsonify(result)
+
+@app.route('/archer/collage')
+def archer_collage():
+    return render_template('archer_collage.html')
+
+@app.route('/archer/product/<asin>')
+def archer_get_product(asin):
+    from product_api import ArcherAPI
+    import logging
+    a = ArcherAPI()
+    product = a.get_by_asins([asin])
+
+    # If found in cache but no image, force a live lookup to backfill
+    if product and not product[0].get('image_encoded_string'):
+        product = []
+
+    if not product:
+        try:
+            r = req.get('https://api.archeraffiliates.com/get_single_product',
+                headers={"Authorization": f"Bearer {a._get_token()}"},
+                params={"asin": asin}, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                img = data.get("image_encoded_string", "")
+                if img:
+                    conn = sqlite3.connect(a.CACHE_DB)
+                    conn.execute("UPDATE products SET image_encoded_string=? WHERE asin=?", (img, asin))
+                    conn.commit()
+                    conn.close()
+                return jsonify({"product": {
+                    "asin": data.get("ASIN"),
+                    "product_name": data.get("product_name"),
+                    "company_name": data.get("company_name"),
+                    "price": data.get("price"),
+                    "commission_payout": data.get("commission_payout_aff"),
+                    "image_encoded_string": img,
+                    "product_category": data.get("product_category")
+                }})
+        except Exception as e:
+            logging.error(f"[ARCHER] Product lookup failed for {asin}: {e}")
+        return jsonify({"error": "Product not found"}), 404
+    return jsonify({"product": product[0]})
+
+@app.route('/archer/generate_caption', methods=['POST'])
+def archer_generate_caption():
+    data = request.get_json() or {}
+    products_str = data.get('products', '')
+    try:
+        client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+        message = client.messages.create(
+            model='claude-sonnet-4-6',
+            max_tokens=200,
+            system="""You are Steph from @EverydaywithSteph and the Mommy & Me Collective.
+Write a short, enthusiastic Facebook/Instagram caption for a product collage.
+Keep it 2-3 sentences max. Warm, mom-to-mom tone. Light emojis.
+Mention the products naturally. End with a call to action like "Links in bio!" or "Shop below! 👇"
+Return ONLY the caption text, nothing else.""",
+            messages=[{"role": "user", "content": f"Write a caption for these products: {products_str}"}]
+        )
+        return jsonify({"caption": message.content[0].text.strip()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/archer/collage/save', methods=['POST'])
+def archer_save_collage():
+    from product_api import ArcherAPI
+    data = request.get_json() or {}
+    slug = data.get('slug', '').strip().lower().replace(' ', '-')
+    if not slug or not data.get('products'):
+        return jsonify({'error': 'slug and products required'}), 400
+
+    a = ArcherAPI()
+    products = data.get('products', [])
+    for p in products:
+        asin = p.get('asin', '')
+        if asin and not p.get('attribution_link'):
+            link = a.generate_link(asin, label=f"{slug}-{asin.lower()}")
+            if link:
+                p['attribution_link'] = link.get('attribution_link') or link.get('url') or ''
+
+    conn = sqlite3.connect(a.CACHE_DB)
+    conn.execute("""
+        INSERT OR REPLACE INTO collages
+        (slug, products_json, layout, theme, caption, direct_to_amazon, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    """, (
+        slug,
+        json.dumps(products),
+        data.get('layout', 'layout-2'),
+        data.get('theme', 'coral'),
+        data.get('caption', ''),
+        1 if data.get('direct_to_amazon') else 0
+    ))
+    conn.commit()
+    conn.close()
+    return jsonify({'url': f'/shop/{slug}', 'slug': slug})
+
+@app.route('/archer/collages')
+def archer_list_collages():
+    from product_api import ArcherAPI
+    a = ArcherAPI()
+    conn = sqlite3.connect(a.CACHE_DB)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT slug, theme, layout, created_at, click_count, products_json FROM collages ORDER BY created_at DESC LIMIT 20"
+    ).fetchall()
+    conn.close()
+    collages = []
+    for r in rows:
+        products = json.loads(r['products_json'] or '[]')
+        collages.append({
+            'slug': r['slug'],
+            'theme': r['theme'],
+            'layout': r['layout'],
+            'created_at': r['created_at'][:10] if r['created_at'] else '',
+            'click_count': r['click_count'] or 0,
+            'product_count': len(products)
+        })
+    return jsonify({'collages': collages})
+
+@app.route('/shop/<slug>')
+def shop_landing(slug):
+    from product_api import ArcherAPI
+    a = ArcherAPI()
+    conn = sqlite3.connect(a.CACHE_DB)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM collages WHERE slug=?", (slug,)).fetchone()
+    conn.close()
+    if not row:
+        return "Page not found", 404
+    collage = dict(row)
+    products = json.loads(collage.get('products_json') or '[]')
+    collage['direct_to_amazon'] = bool(collage.get('direct_to_amazon'))
+    return render_template('shop_landing.html',
+        collage=collage,
+        products=products,
+        themes=THEMES,
+        pixel_id=PIXEL_ID
+    )
+
+@app.route('/archer/track_click', methods=['POST'])
+def archer_track_click():
+    from product_api import ArcherAPI
+    data = request.get_json() or {}
+    a = ArcherAPI()
+    conn = sqlite3.connect(a.CACHE_DB)
+    conn.execute(
+        "INSERT INTO click_log (asin, slug, fbclid, attribution_url) VALUES (?,?,?,?)",
+        (data.get('asin'), data.get('slug'), data.get('fbclid'), data.get('attribution_url'))
+    )
+    conn.execute(
+        "UPDATE collages SET click_count = click_count + 1 WHERE slug=?",
+        (data.get('slug'),)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
