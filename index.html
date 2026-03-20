@@ -1095,24 +1095,46 @@ function sendChat() {
   const text = input.value.trim();
   if (!text) return;
   const bubbles = document.getElementById('chatBubbles');
+
+  // Render user bubble
   const userRow = document.createElement('div');
   userRow.className = 'chat-row user';
   userRow.innerHTML = `<div class="chat-av user-av">🙋‍♀️</div><div class="chat-bubble user-b">${text}</div>`;
   bubbles.appendChild(userRow);
   input.value = '';
-  setTimeout(() => {
-    const replies = [
-      "omg yes!! I literally just posted about this — check my LTK at <a href='https://www.shopltk.com/explore/EverydaywithSteph'>shopltk.com/EverydaywithSteph</a> for the link 💕",
-      "ok so based on what's actually selling right now — grab the Glitter Dumpling Squishy first, 702 sold already and it's only $13.49! 🔥",
-      "Walmart is having INSANE clearance — Ms. Rachel toddler sets for $7 (was $16)!! Comment LINK and I'll send it 😱",
-      "for baby stuff I always check Walmart first — 16% conversion rate on their sales. The deals are genuinely wild 👀"
-    ];
-    const steph = document.createElement('div');
-    steph.className = 'chat-row';
-    steph.innerHTML = `<div class="chat-av steph">👩‍👧</div><div class="chat-bubble steph-b">${replies[Math.floor(Math.random()*replies.length)]}</div>`;
-    bubbles.appendChild(steph);
-    bubbles.scrollTop = bubbles.scrollHeight;
-  }, 800);
+  input.disabled = true;
+
+  // Typing indicator
+  const typingRow = document.createElement('div');
+  typingRow.className = 'chat-row';
+  typingRow.id = 'typingIndicator';
+  typingRow.innerHTML = `<div class="chat-av steph">👩‍👧</div><div class="chat-bubble steph-b" style="opacity:0.6;font-style:italic">Steph is typing…</div>`;
+  bubbles.appendChild(typingRow);
+  bubbles.scrollTop = bubbles.scrollHeight;
+
+  fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: text }),
+  })
+    .then(res => res.json())
+    .then(data => {
+      document.getElementById('typingIndicator').remove();
+      const steph = document.createElement('div');
+      steph.className = 'chat-row';
+      steph.innerHTML = `<div class="chat-av steph">👩‍👧</div><div class="chat-bubble steph-b">${data.reply}</div>`;
+      bubbles.appendChild(steph);
+      bubbles.scrollTop = bubbles.scrollHeight;
+    })
+    .catch(() => {
+      document.getElementById('typingIndicator').remove();
+      const errRow = document.createElement('div');
+      errRow.className = 'chat-row';
+      errRow.innerHTML = `<div class="chat-av steph">👩‍👧</div><div class="chat-bubble steph-b" style="color:#c00">Sorry, something went wrong. Try again! 🙏</div>`;
+      bubbles.appendChild(errRow);
+      bubbles.scrollTop = bubbles.scrollHeight;
+    })
+    .finally(() => { input.disabled = false; input.focus(); });
 }
 
 // ─── TOAST ───
