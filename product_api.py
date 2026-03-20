@@ -516,7 +516,7 @@ class ArcherAPI:
         try:
             r = requests.post(f"{self.ARCHER_BASE}/generate_attribution_link",
                 headers=self._headers(),
-                json={"asin": asin, "label": label or asin},
+                json={"asin": asin, "link_name": label or asin},
                 timeout=10)
             r.raise_for_status()
             data = r.json()
