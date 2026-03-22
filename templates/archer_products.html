@@ -326,10 +326,22 @@
         <div class="sh-left">
           <div class="sh-title">Archer Catalog</div>
           <div class="sh-count" id="catalog-count">—</div>
-          <div class="sh-badge shb-catalog">Full 113K product search</div>
+          <div class="sh-badge shb-catalog">🏹 Archer 113K catalog</div>
         </div>
       </div>
       <div class="product-grid" id="catalog-grid"></div>
+    </div>
+
+    <hr class="section-divider" id="levanta-divider" style="display:none;">
+    <div id="levanta-section" style="display:none;">
+      <div class="section-head">
+        <div class="sh-left">
+          <div class="sh-title">Levanta Catalog</div>
+          <div class="sh-count" id="levanta-count">—</div>
+          <div class="sh-badge" style="background:var(--teal-light);color:var(--teal);border:0.5px solid rgba(10,107,82,0.3);">⚡ Levanta network</div>
+        </div>
+      </div>
+      <div class="product-grid" id="levanta-grid"></div>
     </div>
 
   </div>
@@ -343,7 +355,8 @@
   let state = {
     matched: [],          // all 217 matched ASINs from API
     filtered: [],         // currently displayed matched products
-    catalogResults: [],   // search results from catalog
+    catalogResults: [],   // Archer search results
+    levantaResults: [],   // Levanta search results
     tray: [],             // selected products {asin, name, commission, link}
     linkedAsins: {},      // asin -> attribution url
     searchQuery: '',
@@ -405,19 +418,40 @@
     if (!query || query.length < 2) {
       document.getElementById('catalog-section').style.display = 'none';
       document.getElementById('catalog-divider').style.display = 'none';
+      document.getElementById('levanta-section').style.display = 'none';
+      document.getElementById('levanta-divider').style.display = 'none';
       return;
     }
     try {
-      const params = new URLSearchParams({ q: query, category: state.category, min_commission: state.minCommission, limit: 24, network: state.network });
+      const params = new URLSearchParams({
+        q: query,
+        category: state.category,
+        min_commission: state.minCommission,
+        limit: 24,
+        network: state.network || 'both'
+      });
       const res = await fetch(`/archer/search?${params}`);
       const data = await res.json();
-      state.catalogResults = data.products || [];
-      document.getElementById('catalog-count').textContent = state.catalogResults.length;
-      document.getElementById('catalog-section').style.display = 'block';
-      document.getElementById('catalog-divider').style.display = 'block';
-      renderCatalogGrid();
+
+      // Archer section
+      const archerResults = data.archer || data.products || [];
+      state.catalogResults = archerResults;
+      const showArcher = archerResults.length > 0 && state.network !== 'levanta';
+      document.getElementById('catalog-count').textContent = archerResults.length;
+      document.getElementById('catalog-section').style.display = showArcher ? 'block' : 'none';
+      document.getElementById('catalog-divider').style.display = showArcher ? 'block' : 'none';
+      if (showArcher) renderCatalogGrid();
+
+      // Levanta section
+      const levantaResults = data.levanta || [];
+      state.levantaResults = levantaResults;
+      const showLevanta = levantaResults.length > 0 && state.network !== 'archer';
+      document.getElementById('levanta-count').textContent = levantaResults.length;
+      document.getElementById('levanta-section').style.display = showLevanta ? 'block' : 'none';
+      document.getElementById('levanta-divider').style.display = showLevanta ? 'block' : 'none';
+      if (showLevanta) renderLevantaGrid();
     } catch(e) {
-      console.error('Catalog search failed:', e);
+      console.error('Search failed:', e);
     }
   }
 
@@ -512,6 +546,15 @@
       return;
     }
     grid.innerHTML = state.catalogResults.map(p => buildCard(p, false)).join('');
+  }
+
+  function renderLevantaGrid() {
+    const grid = document.getElementById('levanta-grid');
+    if (!state.levantaResults.length) {
+      grid.innerHTML = '<div class="empty-state"><div class="es-icon">🔍</div><div class="es-text">No Levanta results found.</div></div>';
+      return;
+    }
+    grid.innerHTML = state.levantaResults.map(p => buildCard(p, false)).join('');
   }
 
   function buildCard(p, isMatched) {
@@ -694,8 +737,13 @@
     ['archer', 'levanta', 'both'].forEach(n => {
       document.getElementById(`net-${n}`)?.classList.toggle('active', n === net);
     });
-    if (state.searchQuery) searchCatalog(state.searchQuery);
-    else loadCatalogPage(1);
+    if (state.searchQuery) {
+      searchCatalog(state.searchQuery);
+    } else {
+      loadCatalogPage(1);
+      document.getElementById('levanta-section').style.display = 'none';
+      document.getElementById('levanta-divider').style.display = 'none';
+    }
   }
 
   function setCategory(cat) {
