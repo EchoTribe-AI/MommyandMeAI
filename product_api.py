@@ -799,6 +799,33 @@ class LevantaAPI:
             "deal": product.get("deal") or {}
         }
 
+    def get_all_accessible_asins(self):
+        """
+        Page through all Levanta products and return a dict of
+        asin -> {commission, title, brandName} for accessible products only.
+        """
+        asin_map = {}
+        cursor = None
+        pages = 0
+        while pages < 20:  # safety cap — 20 pages × 100 = 2000 products
+            data = self.get_products(limit=100, cursor=cursor)
+            products = data.get("products", [])
+            for p in products:
+                if p.get("access") is True:
+                    asin = p.get("asin")
+                    if asin:
+                        asin_map[asin] = {
+                            "commission": p.get("commission", 0),
+                            "commission_pct": f"{int(p.get('commission', 0) * 100)}%",
+                            "title": p.get("title") or p.get("name") or "",
+                            "brand": p.get("brandName") or p.get("brand") or "",
+                        }
+            cursor = data.get("cursor")
+            if not cursor or not products:
+                break
+            pages += 1
+        return asin_map
+
     def search_products(self, query, limit=24):
         """
         Levanta doesn't have a search endpoint — pull products and filter locally.

@@ -291,6 +291,87 @@ def archer_search():
         'levanta_total': len(levanta_formatted),
     })
 
+@app.route('/archer/levanta_match_scan')
+def archer_levanta_match_scan():
+    """
+    Read all ASINs from Steph's Amazon earnings CSV, cross-reference
+    against accessible Levanta products, and save matches to data/levanta_matches.json.
+    """
+    import csv
+    from product_api import LevantaAPI
+
+    CSV_PATH = os.path.join(os.path.dirname(__file__), 'data', 'Amazon_Earnings_2026.csv')
+    OUT_PATH = os.path.join(os.path.dirname(__file__), 'data', 'levanta_matches.json')
+
+    if not os.path.exists(CSV_PATH):
+        return jsonify({'error': 'Amazon_Earnings_2026.csv not found in data/'}), 404
+
+    # Read CSV — row 1 is report title (skip), row 2 is headers
+    steph_asins = {}  # asin -> {revenue, units, name, category}
+    with open(CSV_PATH, newline='', encoding='utf-8-sig') as f:
+        next(f)  # skip "Fee-Earnings reports from..." title row
+        reader = csv.DictReader(f)
+        for row in reader:
+            asin = (row.get('ASIN') or '').strip()
+            if not asin:
+                continue
+            try:
+                revenue = float(row.get('Revenue($)') or 0)
+                units = int(row.get('Items Shipped') or 0)
+            except (ValueError, TypeError):
+                revenue, units = 0, 0
+            if asin in steph_asins:
+                steph_asins[asin]['revenue'] += revenue
+                steph_asins[asin]['units'] += units
+            else:
+                steph_asins[asin] = {
+                    'name': (row.get('Name') or '').strip(),
+                    'category': (row.get('Category') or '').strip(),
+                    'revenue': revenue,
+                    'units': units,
+                }
+
+    # Fetch all accessible Levanta ASINs
+    lv = LevantaAPI()
+    try:
+        levanta_map = lv.get_all_accessible_asins()
+    except Exception as e:
+        logging.error(f"[LEVANTA] get_all_accessible_asins failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+    # Find matches
+    matches = []
+    for asin, steph in steph_asins.items():
+        if asin in levanta_map:
+            lv_data = levanta_map[asin]
+            matches.append({
+                'asin': asin,
+                'name': steph['name'],
+                'category': steph['category'],
+                'steph_revenue': round(steph['revenue'], 2),
+                'steph_units': steph['units'],
+                'levanta_commission': lv_data['commission_pct'],
+                'levanta_commission_rate': lv_data['commission'],
+                'levanta_title': lv_data['title'],
+                'levanta_brand': lv_data['brand'],
+            })
+
+    # Sort by Steph's revenue descending
+    matches.sort(key=lambda x: x['steph_revenue'], reverse=True)
+
+    # Save to file
+    with open(OUT_PATH, 'w') as f:
+        json.dump(matches, f, indent=2)
+
+    return jsonify({
+        'steph_asins': len(steph_asins),
+        'levanta_asins': len(levanta_map),
+        'matches_found': len(matches),
+        'top_matches': matches[:10],
+        'saved_to': 'data/levanta_matches.json',
+    })
+
+
 @app.route('/archer/backfill_images')
 def archer_backfill_images():
     """One-time route to populate image URLs for matched ASINs."""

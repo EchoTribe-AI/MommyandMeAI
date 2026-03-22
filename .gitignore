@@ -9,4 +9,5 @@ wheels/
 # Virtual environments
 .venv
 data/archer_catalog.db
-data/archer_catalog.db
+data/Amazon_Earnings_2026.csv
+data/levanta_matches.json
