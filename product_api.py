@@ -420,6 +420,60 @@ class ArcherAPI:
         finally:
             conn.close()
 
+    def get_matched_products_enriched(self):
+        """
+        Load matched ASINs and enrich with live data from both Archer SQLite
+        and Levanta API. If a product exists in both, return both commission rates.
+        """
+        matched = self._load_matched_json()
+        conn = sqlite3.connect(self.CACHE_DB)
+        conn.row_factory = sqlite3.Row
+
+        results = []
+        lv = LevantaAPI()
+
+        for p in matched:
+            asin = p.get('asin')
+            # Get Archer data from SQLite
+            archer_row = conn.execute(
+                "SELECT * FROM products WHERE asin=?", (asin,)
+            ).fetchone()
+
+            archer_data = dict(archer_row) if archer_row else {
+                'asin': asin,
+                'product_name': p.get('product_name'),
+                'company_name': p.get('brand'),
+                'commission_payout': p.get('commission'),
+                'product_category': p.get('archer_category'),
+                'price': p.get('price'),
+                'avg_rating': p.get('rating'),
+                'total_reviews': p.get('reviews'),
+                'steph_revenue': p.get('steph_revenue', 0),
+                'steph_units': p.get('steph_units', 0),
+            }
+            archer_data['source'] = 'archer'
+            archer_data['networks'] = ['archer']
+
+            # Check if Levanta has this ASIN too
+            try:
+                lv_product = lv.get_product_by_asin(asin)
+                if lv_product:
+                    lv_comm = lv_product.get('commission', 0)
+                    archer_data['levanta_commission'] = f"{int(lv_comm * 100)}%"
+                    archer_data['networks'] = ['archer', 'levanta']
+                    # Use Levanta image if Archer has none
+                    if not archer_data.get('image_encoded_string'):
+                        archer_data['image_encoded_string'] = lv_product.get('image') or ''
+            except Exception:
+                pass
+
+            results.append(archer_data)
+
+        conn.close()
+        # Sort by steph_revenue descending
+        results.sort(key=lambda x: x.get('steph_revenue', 0) or 0, reverse=True)
+        return results
+
     def _cache_is_fresh(self):
         conn = sqlite3.connect(self.CACHE_DB)
         row = conn.execute(
