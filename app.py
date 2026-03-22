@@ -234,17 +234,19 @@ def archer_search():
     if network in ('archer', 'both'):
         a = ArcherAPI()
         archer_results = a.search_catalog(q, category=category or None, limit=limit)
-        # When searching and SQLite is sparse, supplement from matched JSON
-        if q and len(archer_results) < limit:
+        # Supplement from matched JSON when SQLite is sparse
+        if len(archer_results) < limit:
             matched = a._load_matched_json()
-            q_lower = q.lower()
+            q_lower = q.lower() if q else ''
             existing_asins = {r['asin'] for r in archer_results}
             for p in matched:
                 if p.get('asin') in existing_asins:
                     continue
-                if (q_lower in (p.get('product_name') or '').lower() or
-                    q_lower in (p.get('brand') or '').lower() or
-                    q_lower in (p.get('archer_category') or '').lower()):
+                cat_lower = category.lower() if category else ''
+                name_match = q_lower and (q_lower in (p.get('product_name') or '').lower() or
+                    q_lower in (p.get('brand') or '').lower())
+                cat_match = cat_lower and cat_lower in (p.get('archer_category') or '').lower()
+                if name_match or cat_match or (not q_lower and not cat_lower):
                     archer_results.append({
                         'asin': p.get('asin'),
                         'product_name': p.get('product_name'),

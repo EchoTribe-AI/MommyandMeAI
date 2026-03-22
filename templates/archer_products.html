@@ -579,8 +579,8 @@
       products.sort((a, b) => (b.steph_revenue || 0) - (a.steph_revenue || 0));
     } else if (state.sortBy === 'commission') {
       products.sort((a, b) => {
-        const ra = parseFloat((a.commission || '').replace('%', '')) || 0;
-        const rb = parseFloat((b.commission || '').replace('%', '')) || 0;
+        const ra = parseFloat(((a.commission_payout || a.commission) || '').replace('%', '')) || 0;
+        const rb = parseFloat(((b.commission_payout || b.commission) || '').replace('%', '')) || 0;
         return rb - ra;
       });
     } else if (state.sortBy === 'rating') {
@@ -785,6 +785,7 @@
     document.getElementById('catalog-section').style.display = 'none';
     document.getElementById('catalog-divider').style.display = 'none';
     state.catalogResults = [];
+    loadCatalogPage(1);
   }
 
   function setNetwork(net) {
