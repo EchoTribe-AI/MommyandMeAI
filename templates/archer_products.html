@@ -226,7 +226,7 @@
         <button class="filter-tag" id="net-levanta" onclick="setNetwork('levanta')">⚡ Levanta</button>
         <button class="filter-tag" id="net-both" onclick="setNetwork('both')">🔀 Both</button>
       </div>
-      <div style="font-size:10px;color:var(--text4);margin-top:4px;">Matched products are always Archer. Network filter applies to catalog search below.</div>
+      <div style="font-size:10px;color:var(--text4);margin-top:4px;">Matched products show ⚡ Levanta badge where Steph has Levanta access too.</div>
     </div>
 
     <!-- FILTERS -->
@@ -285,12 +285,16 @@
     <!-- STATS -->
     <div class="stats-bar">
       <div class="stat-item">
-        <div class="si-val" id="stat-matched">217</div>
+        <div class="si-val" id="stat-matched">—</div>
         <div class="si-label">Matched ASINs</div>
       </div>
       <div class="stat-item">
         <div class="si-val" id="stat-catalog">113K</div>
-        <div class="si-label">Archer catalog</div>
+        <div class="si-label">Archer Catalog</div>
+      </div>
+      <div class="stat-item">
+        <div class="si-val" id="stat-levanta">—</div>
+        <div class="si-label">Levanta Catalog</div>
       </div>
       <div class="stat-item">
         <div class="si-val" id="stat-selected">0</div>
@@ -298,7 +302,7 @@
       </div>
       <div class="stat-item">
         <div class="si-val" id="stat-linked">0</div>
-        <div class="si-label">Links generated</div>
+        <div class="si-label">Links Generated</div>
       </div>
     </div>
 
@@ -357,6 +361,7 @@
     filtered: [],         // currently displayed matched products
     catalogResults: [],   // Archer search results
     levantaResults: [],   // Levanta search results
+    levantaMap: {},       // asin -> levanta product (for cross-ref badges on matched)
     tray: [],             // selected products {asin, name, commission, link}
     linkedAsins: {},      // asin -> attribution url
     searchQuery: '',
@@ -373,6 +378,7 @@
     renderSkeletons('matched-loading', 12);
     await loadMatchedProducts();
     await loadCatalogPage(1);
+    loadLevantaMap();  // async, re-renders matched grid when done
   };
 
   // ── API CALLS ─────────────────────────────────────────
@@ -437,11 +443,27 @@
       state.levantaResults = data.levanta || [];
       const show = state.levantaResults.length > 0;
       document.getElementById('levanta-count').textContent = state.levantaResults.length;
+      document.getElementById('stat-levanta').textContent = state.levantaResults.length;
       document.getElementById('levanta-section').style.display = show ? 'block' : 'none';
       document.getElementById('levanta-divider').style.display = show ? 'block' : 'none';
       if (show) renderLevantaGrid();
     } catch(e) {
       console.error('Levanta browse failed:', e);
+    }
+  }
+
+  async function loadLevantaMap() {
+    try {
+      const res = await fetch('/archer/search?q=&network=levanta&limit=100');
+      const data = await res.json();
+      state.levantaMap = {};
+      (data.levanta || []).forEach(p => {
+        if (p.asin) state.levantaMap[p.asin] = p;
+      });
+      document.getElementById('stat-levanta').textContent = Object.keys(state.levantaMap).length;
+      renderMatchedGrid();  // re-render to show Levanta badges
+    } catch(e) {
+      console.error('Levanta map load failed:', e);
     }
   }
 
@@ -469,6 +491,7 @@
       state.catalogResults = archerResults;
       const showArcher = archerResults.length > 0 && state.network !== 'levanta';
       document.getElementById('catalog-count').textContent = archerResults.length;
+      document.getElementById('stat-catalog').textContent = archerResults.length || '113K';
       document.getElementById('catalog-section').style.display = showArcher ? 'block' : 'none';
       document.getElementById('catalog-divider').style.display = showArcher ? 'block' : 'none';
       if (showArcher) renderCatalogGrid();
@@ -478,6 +501,7 @@
       state.levantaResults = levantaResults;
       const showLevanta = levantaResults.length > 0 && state.network !== 'archer';
       document.getElementById('levanta-count').textContent = levantaResults.length;
+      document.getElementById('stat-levanta').textContent = levantaResults.length || Object.keys(state.levantaMap).length || '—';
       document.getElementById('levanta-section').style.display = showLevanta ? 'block' : 'none';
       document.getElementById('levanta-divider').style.display = showLevanta ? 'block' : 'none';
       if (showLevanta) renderLevantaGrid();
@@ -615,8 +639,8 @@
     return `
     <div class="product-card ${isSelected ? 'selected' : ''} ${isLinked ? 'linked' : ''}" 
          id="card-${asin}" onclick="toggleSelect('${asin}', '${escStr(name)}', '${commission}')">
-      ${isMatched ? '<div class="pc-matched-badge">✓ Matched</div>' : ''}
-      ${p.source === 'levanta' ? '<div class="pc-matched-badge" style="background:#e8f8f4;color:#0a6b52;border-color:rgba(10,107,82,0.3);">⚡ Levanta</div>' : ''}
+      ${isMatched ? `<div class="pc-matched-badge">✓ Matched${state.levantaMap[asin] ? ' · ⚡ Levanta' : ''}</div>` : ''}
+      ${!isMatched && p.source === 'levanta' ? '<div class="pc-matched-badge" style="background:#e8f8f4;color:#0a6b52;border-color:rgba(10,107,82,0.3);">⚡ Levanta</div>' : ''}
       <div class="pc-check">${isSelected || isLinked ? '✓' : ''}</div>
       <div class="pc-image">
         ${p.image_encoded_string ?

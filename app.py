@@ -234,6 +234,30 @@ def archer_search():
     if network in ('archer', 'both'):
         a = ArcherAPI()
         archer_results = a.search_catalog(q, category=category or None, limit=limit)
+        # When searching and SQLite is sparse, supplement from matched JSON
+        if q and len(archer_results) < limit:
+            matched = a._load_matched_json()
+            q_lower = q.lower()
+            existing_asins = {r['asin'] for r in archer_results}
+            for p in matched:
+                if p.get('asin') in existing_asins:
+                    continue
+                if (q_lower in (p.get('product_name') or '').lower() or
+                    q_lower in (p.get('brand') or '').lower() or
+                    q_lower in (p.get('archer_category') or '').lower()):
+                    archer_results.append({
+                        'asin': p.get('asin'),
+                        'product_name': p.get('product_name'),
+                        'company_name': p.get('brand'),
+                        'commission_payout': p.get('commission'),
+                        'product_category': p.get('archer_category'),
+                        'price': p.get('price'),
+                        'avg_rating': p.get('rating'),
+                        'steph_revenue': p.get('steph_revenue'),
+                        'source': 'archer'
+                    })
+                if len(archer_results) >= limit:
+                    break
         if min_commission > 0:
             archer_results = [p for p in archer_results if
                 float((p.get('commission_payout') or '0').replace('%', '') or 0) >= min_commission]
@@ -248,13 +272,13 @@ def archer_search():
             if q:
                 lv_raw_list = lv.search_products(q, limit=limit)
             else:
-                # Browse mode — top 20 accessible products by commission descending
-                data = lv.get_products(limit=100)
+                # Browse mode — top accessible products by commission descending, up to limit
+                data = lv.get_products(limit=200)
                 lv_raw_list = sorted(
                     [p for p in data.get('products', []) if p.get('access') is True],
                     key=lambda p: p.get('commission', 0),
                     reverse=True
-                )[:20]
+                )[:limit]
             formatted = [lv.format_for_frontend(p) for p in lv_raw_list]
             if min_commission > 0:
                 formatted = [p for p in formatted if
