@@ -320,24 +320,38 @@ class ArcherNetworkMatcher(NetworkMatcher):
 
 class LevantaNetworkMatcher(NetworkMatcher):
     """
-    Reads data/network_cache_levanta.json — a flat list of ASINs that the
-    levanta-integration branch writes after syncing the Levanta catalog.
-    Returns empty set until that file exists.
+    Fetches accessible ASINs live from LevantaAPI, writes them to
+    data/network_cache_levanta.json, falls back to cache on API failure.
     """
     name = 'levanta'
     CACHE_PATH = 'data/network_cache_levanta.json'
 
     def get_asin_set(self) -> set:
+        # Try live API first
+        try:
+            lv = LevantaAPI()
+            if lv.api_key:
+                asin_map = lv.get_all_accessible_asins()
+                asins = list(asin_map.keys())
+                os.makedirs('data', exist_ok=True)
+                with open(self.CACHE_PATH, 'w') as f:
+                    json.dump(asins, f)
+                logging.info(f"[LEVANTA] get_asin_set: {len(asins)} ASINs from live API, cache written")
+                return set(asins)
+        except Exception as e:
+            logging.warning(f"[LEVANTA] Live API failed, falling back to cache: {e}")
+
+        # Fall back to cache
         if not os.path.exists(self.CACHE_PATH):
             return set()
         try:
             with open(self.CACHE_PATH) as f:
                 data = json.load(f)
-            # Accept either a plain list or {"asins": [...]}
             asins = data if isinstance(data, list) else data.get('asins', [])
+            logging.info(f"[LEVANTA] get_asin_set: {len(asins)} ASINs from cache")
             return set(asins)
         except Exception as e:
-            logging.warning(f"[LEVANTA] get_asin_set failed: {e}")
+            logging.warning(f"[LEVANTA] Cache read failed: {e}")
             return set()
 
 
