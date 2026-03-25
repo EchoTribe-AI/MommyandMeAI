@@ -287,6 +287,60 @@ def detect_category(query: str) -> str:
     return 'general'
 
 
+# ── NETWORK MATCHER REGISTRY ──────────────────────────────────────────────────
+# Each affiliate network implements get_asin_set() → set of ASINs it supports.
+# To add a new network: subclass NetworkMatcher, add to NETWORK_MATCHERS list.
+
+class NetworkMatcher:
+    name = ''
+    def get_asin_set(self) -> set:
+        raise NotImplementedError
+
+
+class ArcherNetworkMatcher(NetworkMatcher):
+    name = 'archer'
+
+    def __init__(self, db_path):
+        self.db_path = db_path
+
+    def get_asin_set(self) -> set:
+        if not os.path.exists(self.db_path):
+            return set()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            rows = conn.execute(
+                "SELECT asin FROM products WHERE product_status='active' OR product_status IS NULL"
+            ).fetchall()
+            conn.close()
+            return {r[0] for r in rows if r[0]}
+        except Exception as e:
+            logging.warning(f"[ARCHER] get_asin_set failed: {e}")
+            return set()
+
+
+class LevantaNetworkMatcher(NetworkMatcher):
+    """
+    Reads data/network_cache_levanta.json — a flat list of ASINs that the
+    levanta-integration branch writes after syncing the Levanta catalog.
+    Returns empty set until that file exists.
+    """
+    name = 'levanta'
+    CACHE_PATH = 'data/network_cache_levanta.json'
+
+    def get_asin_set(self) -> set:
+        if not os.path.exists(self.CACHE_PATH):
+            return set()
+        try:
+            with open(self.CACHE_PATH) as f:
+                data = json.load(f)
+            # Accept either a plain list or {"asins": [...]}
+            asins = data if isinstance(data, list) else data.get('asins', [])
+            return set(asins)
+        except Exception as e:
+            logging.warning(f"[LEVANTA] get_asin_set failed: {e}")
+            return set()
+
+
 class ArcherAPI:
     """Archer Affiliates API client with auto-refreshing bearer token and local SQLite catalog cache."""
 
@@ -613,20 +667,32 @@ class ArcherAPI:
 
     # ── EARNINGS CSV MATCHING ─────────────────────────────
 
-    EARNINGS_CSV_PATH = "data/2025-Q12026 amazon asin earnings.csv"
+    # Canonical upload path — always written by the upload endpoint
+    EARNINGS_CSV_PATH   = 'data/earnings_latest.csv'
+    # Legacy fallback for existing local file
+    EARNINGS_CSV_LEGACY = 'data/2025-Q12026 amazon asin earnings.csv'
+    SCAN_META_PATH      = 'data/scan_meta.json'
 
     def load_earnings_csv(self):
-        """Parse the earnings CSV into a dict keyed by ASIN."""
+        """
+        Parse the earnings CSV into a dict keyed by ASIN.
+        Prefers data/earnings_latest.csv; falls back to legacy filename.
+        Aggregates duplicate ASINs across time periods by summing numeric fields.
+        """
         import csv
-        earnings = {}
-        if not os.path.exists(self.EARNINGS_CSV_PATH):
-            logging.warning(f"[ARCHER] Earnings CSV not found: {self.EARNINGS_CSV_PATH}")
-            return earnings
+        path = self.EARNINGS_CSV_PATH
+        if not os.path.exists(path):
+            path = self.EARNINGS_CSV_LEGACY
+        if not os.path.exists(path):
+            logging.warning('[SCAN] No earnings CSV found. Upload via /archer/upload_earnings')
+            return {}
+
         def clean_num(val):
             s = (val or '').replace('$', '').replace(',', '').replace('%', '').strip()
             return float(s) if s and s not in ('-', 'N/A', '') else 0.0
 
-        with open(self.EARNINGS_CSV_PATH, newline='', encoding='utf-8-sig') as f:
+        earnings = {}
+        with open(path, newline='', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 asin = row.get('Product ASIN', '').strip()
@@ -645,7 +711,7 @@ class ArcherAPI:
                     'time_period':            row.get('Time Period', '').strip(),
                 }
                 if asin in earnings:
-                    # Aggregate duplicate ASINs (same ASIN across multiple time periods)
+                    # Aggregate same ASIN across multiple time periods
                     for k in ('clicks', 'items_ordered', 'direct_ordered',
                               'items_shipped', 'items_returned'):
                         earnings[asin][k] += row_data[k]
@@ -654,45 +720,55 @@ class ArcherAPI:
                 else:
                     earnings[asin] = row_data
 
-        logging.info(f"[ARCHER] Earnings CSV loaded: {len(earnings)} unique ASINs")
+        logging.info(f'[SCAN] Earnings CSV loaded from {path}: {len(earnings)} unique ASINs')
         return earnings
 
     def asin_match_scan(self):
         """
-        Cross-reference earnings CSV ASINs against Archer catalog (and Levanta stub).
-        Writes data/matched_asins.json and returns summary stats.
+        Cross-reference earnings CSV ASINs against every registered network.
+        To add a new network: subclass NetworkMatcher, add one line to matchers list below.
+        Writes data/matched_asins.json and data/scan_meta.json.
+        Safe to re-run at any time — fully overwrites previous results.
         """
         earnings = self.load_earnings_csv()
         if not earnings:
-            return {'error': 'Earnings CSV not found or empty'}
+            return {'error': 'No earnings CSV found. Upload via /archer/upload_earnings.'}
 
         asin_list = list(earnings.keys())
 
-        # Batch lookup in Archer SQLite — exact ASIN match
-        conn = sqlite3.connect(self.CACHE_DB)
-        conn.row_factory = sqlite3.Row
-        placeholders = ",".join("?" * len(asin_list))
-        archer_rows = conn.execute(
-            f"SELECT * FROM products WHERE asin IN ({placeholders})",
-            asin_list
-        ).fetchall()
-        conn.close()
-        archer_map = {row['asin']: dict(row) for row in archer_rows}
+        # ── Register networks here — add new ones as more are onboarded ──────
+        matchers = [
+            ArcherNetworkMatcher(self.CACHE_DB),
+            LevantaNetworkMatcher(),
+            # ImpactNetworkMatcher(), CJNetworkMatcher(), etc.
+        ]
+
+        # Build ASIN sets per network
+        network_sets = {}
+        for m in matchers:
+            network_sets[m.name] = m.get_asin_set()
+            logging.info(f'[SCAN] {m.name}: {len(network_sets[m.name])} ASINs in catalog')
+
+        # Batch-fetch Archer product details for matched ASINs only
+        archer_asins = [a for a in asin_list if a in network_sets.get('archer', set())]
+        archer_map = {}
+        if archer_asins:
+            conn = sqlite3.connect(self.CACHE_DB)
+            conn.row_factory = sqlite3.Row
+            ph = ','.join('?' * len(archer_asins))
+            rows = conn.execute(
+                f'SELECT * FROM products WHERE asin IN ({ph})', archer_asins
+            ).fetchall()
+            conn.close()
+            archer_map = {r['asin']: dict(r) for r in rows}
 
         results = []
-        archer_matched_count = 0
-
         for asin in asin_list:
             e = earnings[asin]
-            archer = archer_map.get(asin)
-            archer_matched = archer is not None
-
-            if archer_matched:
-                archer_matched_count += 1
+            matched_networks = [n for n, s in network_sets.items() if asin in s]
 
             entry = {
                 'asin':                   asin,
-                # Earnings data from CSV
                 'clicks':                 e['clicks'],
                 'items_ordered':          e['items_ordered'],
                 'direct_ordered':         e['direct_ordered'],
@@ -706,45 +782,53 @@ class ArcherAPI:
                 # Frontend-compat aliases
                 'steph_revenue':          e['total_earnings'],
                 'steph_units':            e['items_shipped'],
-                # Match flags
-                'archer_matched':         archer_matched,
-                'levanta_matched':        False,  # wired up on levanta-integration merge
+                # Network match flags — one per registered matcher
+                'networks':               matched_networks,
+                **{f'{n}_matched': (asin in s) for n, s in network_sets.items()},
             }
 
-            # Archer catalog fields (only if matched)
-            if archer:
+            # Enrich from Archer catalog data if matched
+            if asin in archer_map:
+                a = archer_map[asin]
                 entry.update({
-                    'product_name':       archer.get('product_name', ''),
-                    'brand':              archer.get('company_name', ''),
-                    'price':              archer.get('price', ''),
-                    'commission':         archer.get('commission_payout', ''),
-                    'archer_category':    archer.get('product_category', ''),
-                    'rating':             archer.get('avg_rating', ''),
-                    'reviews':            archer.get('total_reviews', ''),
-                    'image_encoded_string': archer.get('image_encoded_string', ''),
+                    'product_name':         a.get('product_name', ''),
+                    'brand':                a.get('company_name', ''),
+                    'price':                a.get('price', ''),
+                    'commission':           a.get('commission_payout', ''),
+                    'archer_category':      a.get('product_category', ''),
+                    'rating':               a.get('avg_rating', ''),
+                    'reviews':              a.get('total_reviews', ''),
+                    'image_encoded_string': a.get('image_encoded_string', ''),
                 })
 
             results.append(entry)
 
-        # Sort by total_earnings descending
-        results.sort(key=lambda x: x['total_earnings'], reverse=True)
+        # Sort: most networks first, then by total earnings
+        results.sort(key=lambda x: (-len(x['networks']), -x['total_earnings']))
 
-        # Write matched_asins.json
         os.makedirs('data', exist_ok=True)
         with open(self.MATCHED_ASINS_PATH, 'w') as f:
             json.dump(results, f, indent=2)
 
-        logging.info(
-            f"[ARCHER] asin_match_scan: {len(results)} ASINs, "
-            f"{archer_matched_count} Archer matched"
-        )
-        return {
-            'total_asins':         len(results),
-            'archer_matched':      archer_matched_count,
-            'archer_unmatched':    len(results) - archer_matched_count,
-            'levanta_matched':     0,
-            'written_to':          self.MATCHED_ASINS_PATH,
+        network_counts = {
+            n: sum(1 for r in results if r.get(f'{n}_matched'))
+            for n in network_sets
         }
+        meta = {
+            'scanned_at':  datetime.now().isoformat(),
+            'total_asins': len(results),
+            'networks':    network_counts,
+            'any_matched': sum(1 for r in results if r['networks']),
+            'unmatched':   sum(1 for r in results if not r['networks']),
+        }
+        with open(self.SCAN_META_PATH, 'w') as f:
+            json.dump(meta, f, indent=2)
+
+        logging.info(
+            f'[SCAN] Complete: {len(results)} ASINs | '
+            + ' | '.join(f'{n}={c}' for n, c in network_counts.items())
+        )
+        return meta
 
     def get_by_asin(self, asin):
         conn = sqlite3.connect(self.CACHE_DB)

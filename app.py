@@ -213,16 +213,60 @@ def archer_matched():
     return jsonify({'products': products})
 
 
+@app.route('/archer/upload_earnings', methods=['POST'])
+def archer_upload_earnings():
+    """
+    Accept an Amazon earnings CSV upload, save as earnings_latest.csv,
+    then immediately run the network match scan.
+    """
+    from product_api import ArcherAPI
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided — send as multipart field "file"'}), 400
+    f = request.files['file']
+    if not f.filename.lower().endswith('.csv'):
+        return jsonify({'error': 'File must be a .csv'}), 400
+
+    os.makedirs('data', exist_ok=True)
+    save_path = 'data/earnings_latest.csv'
+    f.save(save_path)
+    logging.info(f'[SCAN] Earnings CSV uploaded: {f.filename} → {save_path}')
+
+    a = ArcherAPI()
+    result = a.asin_match_scan()
+    result['uploaded_filename'] = f.filename
+    return jsonify(result)
+
+
 @app.route('/archer/asin_match_scan')
 def archer_asin_match_scan():
     """
-    Cross-reference 2025-Q12026 earnings CSV against Archer catalog.
-    Rewrites matched_asins.json. Safe to re-run at any time.
+    Re-run network match scan against the last uploaded earnings CSV.
+    Safe to call any time — fully rewrites matched_asins.json.
     """
     from product_api import ArcherAPI
     a = ArcherAPI()
     result = a.asin_match_scan()
     return jsonify(result)
+
+
+@app.route('/archer/scan_status')
+def archer_scan_status():
+    """Return metadata from the last scan run (scan_meta.json)."""
+    meta_path = 'data/scan_meta.json'
+    earnings_path = 'data/earnings_latest.csv'
+    legacy_path = 'data/2025-Q12026 amazon asin earnings.csv'
+
+    status = {'never_run': not os.path.exists(meta_path)}
+    if not status['never_run']:
+        with open(meta_path) as f:
+            status.update(json.load(f))
+
+    status['csv_uploaded'] = os.path.exists(earnings_path)
+    status['csv_filename'] = (
+        'earnings_latest.csv' if os.path.exists(earnings_path)
+        else ('2025-Q12026 amazon asin earnings.csv' if os.path.exists(legacy_path) else None)
+    )
+    return jsonify(status)
 
 @app.route('/archer/search')
 def archer_search():

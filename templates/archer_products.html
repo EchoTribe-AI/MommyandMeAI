@@ -307,6 +307,35 @@
       <div id="placement-preview" style="font-size:10px;color:var(--text4);margin-top:5px;font-family:var(--mono);word-break:break-all;"></div>
     </div>
 
+    <!-- DATA SYNC -->
+    <div class="sidebar-section">
+      <div class="ss-label">Data Sync</div>
+
+      <div id="scan-status-bar" style="font-size:10px;color:var(--text4);margin-bottom:8px;line-height:1.6;">
+        Loading…
+      </div>
+
+      <!-- CSV Upload -->
+      <label style="display:block;margin-bottom:6px;">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">Amazon Earnings CSV</div>
+        <input type="file" id="csv-file-input" accept=".csv" style="display:none" onchange="handleCsvSelect(this)">
+        <button class="btn btn-outline" style="width:100%;font-size:11px;" onclick="document.getElementById('csv-file-input').click()">
+          Upload Earnings CSV
+        </button>
+      </label>
+      <div id="csv-selected-name" style="font-size:10px;color:var(--text4);margin-bottom:6px;display:none;"></div>
+
+      <button class="btn btn-primary" id="btn-run-scan" style="font-size:11px;" onclick="runScan()" disabled>
+        Run Network Scan
+      </button>
+
+      <!-- Scan Results -->
+      <div id="scan-results" style="display:none;margin-top:10px;background:var(--bg);border:0.5px solid var(--border);border-radius:var(--r);padding:8px 10px;">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--text4);margin-bottom:6px;">Last Scan</div>
+        <div id="scan-results-body" style="font-size:11px;color:var(--text2);line-height:1.8;"></div>
+      </div>
+    </div>
+
     <!-- SELECTION TRAY -->
     <div class="sidebar-section">
       <div class="ss-label">Selected (<span id="tray-num">0</span>)</div>
@@ -450,6 +479,7 @@
       updatePlacementPreview();
     });
 
+    loadScanStatus();  // async, non-blocking
     renderSkeletons('matched-loading', 12);
     await loadMatchedProducts();
     await loadCatalogPage(1);
@@ -1135,6 +1165,111 @@
 
   function escStr(str) {
     return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  }
+
+  // ── DATA SYNC ─────────────────────────────────────────
+
+  let _csvFile = null;
+
+  async function loadScanStatus() {
+    try {
+      const res = await fetch('/archer/scan_status');
+      const data = await res.json();
+      const bar = document.getElementById('scan-status-bar');
+      if (data.never_run) {
+        bar.textContent = 'No scan run yet. Upload a CSV to start.';
+      } else {
+        const d = new Date(data.scanned_at);
+        const when = d.toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+        const nets = Object.entries(data.networks || {})
+          .map(([n,c]) => `${n}: ${c.toLocaleString()}`).join(' · ');
+        bar.innerHTML =
+          `Last scan: <b>${when}</b><br>` +
+          `${data.total_asins?.toLocaleString()} ASINs · ${nets}<br>` +
+          `CSV: ${data.csv_filename || 'none'}`;
+        showScanResults(data);
+      }
+      // Enable scan button if CSV already on server
+      if (data.csv_uploaded || data.csv_filename) {
+        document.getElementById('btn-run-scan').disabled = false;
+      }
+    } catch(e) {
+      document.getElementById('scan-status-bar').textContent = 'Could not load scan status.';
+    }
+  }
+
+  function handleCsvSelect(input) {
+    _csvFile = input.files[0];
+    if (!_csvFile) return;
+    const nameEl = document.getElementById('csv-selected-name');
+    nameEl.textContent = `Selected: ${_csvFile.name}`;
+    nameEl.style.display = 'block';
+    document.getElementById('btn-run-scan').disabled = false;
+    document.getElementById('btn-run-scan').textContent = 'Upload & Scan';
+  }
+
+  async function runScan() {
+    const btn = document.getElementById('btn-run-scan');
+    btn.disabled = true;
+    btn.textContent = '⏳ Scanning…';
+
+    try {
+      let data;
+      if (_csvFile) {
+        // Upload new CSV + auto-scan
+        const form = new FormData();
+        form.append('file', _csvFile);
+        const res = await fetch('/archer/upload_earnings', { method: 'POST', body: form });
+        data = await res.json();
+      } else {
+        // Re-scan with existing CSV on server
+        const res = await fetch('/archer/asin_match_scan');
+        data = await res.json();
+      }
+
+      if (data.error) {
+        showToast(`Scan error: ${data.error}`);
+        btn.disabled = false;
+        btn.textContent = 'Run Network Scan';
+        return;
+      }
+
+      showScanResults(data);
+      showToast(`Scan complete — ${data.total_asins?.toLocaleString()} ASINs processed`);
+
+      // Refresh the matched products grid with new data
+      _csvFile = null;
+      document.getElementById('csv-selected-name').style.display = 'none';
+      document.getElementById('csv-file-input').value = '';
+      await loadMatchedProducts();
+
+    } catch(e) {
+      showToast('Scan failed — check server logs');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Run Network Scan';
+    }
+  }
+
+  function showScanResults(data) {
+    const el = document.getElementById('scan-results');
+    const body = document.getElementById('scan-results-body');
+    el.style.display = 'block';
+
+    const nets = Object.entries(data.networks || {})
+      .map(([n,c]) => `<span style="color:var(--text2)">${n}</span> <b style="color:var(--green)">${c.toLocaleString()}</b>`)
+      .join('<br>');
+
+    body.innerHTML =
+      `Total ASINs <b>${data.total_asins?.toLocaleString() ?? '—'}</b><br>` +
+      `Any matched <b style="color:var(--green)">${data.any_matched?.toLocaleString() ?? '—'}</b><br>` +
+      `Unmatched <b>${data.unmatched?.toLocaleString() ?? '—'}</b><br>` +
+      (nets ? `<div style="margin-top:4px;padding-top:4px;border-top:0.5px solid var(--border);">${nets}</div>` : '');
+
+    // Update stats bar
+    if (data.any_matched !== undefined) {
+      document.getElementById('stat-matched').textContent = data.any_matched?.toLocaleString() ?? '—';
+    }
   }
 </script>
 </body>
