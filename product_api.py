@@ -557,6 +557,141 @@ class ArcherAPI:
         except Exception:
             return []
 
+    # ── EARNINGS CSV MATCHING ─────────────────────────────
+
+    EARNINGS_CSV_PATH = "data/2025-Q12026 amazon asin earnings.csv"
+
+    def load_earnings_csv(self):
+        """Parse the earnings CSV into a dict keyed by ASIN."""
+        import csv
+        earnings = {}
+        if not os.path.exists(self.EARNINGS_CSV_PATH):
+            logging.warning(f"[ARCHER] Earnings CSV not found: {self.EARNINGS_CSV_PATH}")
+            return earnings
+        def clean_num(val):
+            s = (val or '').replace('$', '').replace(',', '').replace('%', '').strip()
+            return float(s) if s and s not in ('-', 'N/A', '') else 0.0
+
+        with open(self.EARNINGS_CSV_PATH, newline='', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                asin = row.get('Product ASIN', '').strip()
+                if not asin:
+                    continue
+                row_data = {
+                    'clicks':                 int(clean_num(row.get('Clicks', '0'))),
+                    'items_ordered':          int(clean_num(row.get('Items Ordered', '0'))),
+                    'direct_ordered':         int(clean_num(row.get('Direct Items Ordered', '0'))),
+                    'conversion_rate':        row.get('Product Conversion Rate', '').strip(),
+                    'amazon_commission_rate': row.get('Commission Rate', '').strip(),
+                    'items_shipped':          int(clean_num(row.get('Items Shipped', '0'))),
+                    'items_returned':         int(clean_num(row.get('Items Returned', '0'))),
+                    'shipped_revenue':        clean_num(row.get('Items Shipped Revenue', '0')),
+                    'total_earnings':         clean_num(row.get('Total Earnings', '0')),
+                    'time_period':            row.get('Time Period', '').strip(),
+                }
+                if asin in earnings:
+                    # Aggregate duplicate ASINs (same ASIN across multiple time periods)
+                    for k in ('clicks', 'items_ordered', 'direct_ordered',
+                              'items_shipped', 'items_returned'):
+                        earnings[asin][k] += row_data[k]
+                    earnings[asin]['shipped_revenue'] += row_data['shipped_revenue']
+                    earnings[asin]['total_earnings']  += row_data['total_earnings']
+                else:
+                    earnings[asin] = row_data
+
+        logging.info(f"[ARCHER] Earnings CSV loaded: {len(earnings)} unique ASINs")
+        return earnings
+
+    def asin_match_scan(self):
+        """
+        Cross-reference earnings CSV ASINs against Archer catalog (and Levanta stub).
+        Writes data/matched_asins.json and returns summary stats.
+        """
+        earnings = self.load_earnings_csv()
+        if not earnings:
+            return {'error': 'Earnings CSV not found or empty'}
+
+        asin_list = list(earnings.keys())
+
+        # Batch lookup in Archer SQLite — exact ASIN match
+        conn = sqlite3.connect(self.CACHE_DB)
+        conn.row_factory = sqlite3.Row
+        placeholders = ",".join("?" * len(asin_list))
+        archer_rows = conn.execute(
+            f"SELECT * FROM products WHERE asin IN ({placeholders})",
+            asin_list
+        ).fetchall()
+        conn.close()
+        archer_map = {row['asin']: dict(row) for row in archer_rows}
+
+        results = []
+        archer_matched_count = 0
+
+        for asin in asin_list:
+            e = earnings[asin]
+            archer = archer_map.get(asin)
+            archer_matched = archer is not None
+
+            if archer_matched:
+                archer_matched_count += 1
+
+            entry = {
+                'asin':                   asin,
+                # Earnings data from CSV
+                'clicks':                 e['clicks'],
+                'items_ordered':          e['items_ordered'],
+                'direct_ordered':         e['direct_ordered'],
+                'conversion_rate':        e['conversion_rate'],
+                'amazon_commission_rate': e['amazon_commission_rate'],
+                'items_shipped':          e['items_shipped'],
+                'items_returned':         e['items_returned'],
+                'shipped_revenue':        e['shipped_revenue'],
+                'total_earnings':         e['total_earnings'],
+                'time_period':            e['time_period'],
+                # Frontend-compat aliases
+                'steph_revenue':          e['total_earnings'],
+                'steph_units':            e['items_shipped'],
+                # Match flags
+                'archer_matched':         archer_matched,
+                'levanta_matched':        False,  # wired up on levanta-integration merge
+            }
+
+            # Archer catalog fields (only if matched)
+            if archer:
+                entry.update({
+                    'product_name':       archer.get('product_name', ''),
+                    'brand':              archer.get('company_name', ''),
+                    'price':              archer.get('price', ''),
+                    'commission':         archer.get('commission_payout', ''),
+                    'archer_category':    archer.get('product_category', ''),
+                    'rating':             archer.get('avg_rating', ''),
+                    'reviews':            archer.get('total_reviews', ''),
+                    'image_encoded_string': archer.get('image_encoded_string', ''),
+                })
+
+            results.append(entry)
+
+        # Sort by total_earnings descending
+        results.sort(key=lambda x: x['total_earnings'], reverse=True)
+
+        # Write matched_asins.json
+        os.makedirs('data', exist_ok=True)
+        with open(self.MATCHED_ASINS_PATH, 'w') as f:
+            json.dump(results, f, indent=2)
+
+        logging.info(
+            f"[ARCHER] asin_match_scan: {len(results)} ASINs, "
+            f"{archer_matched_count} Archer matched"
+        )
+        return {
+            'total_asins':         len(results),
+            'archer_matched':      archer_matched_count,
+            'archer_unmatched':    len(results) - archer_matched_count,
+            'levanta_matched':     0,
+            'written_to':          self.MATCHED_ASINS_PATH,
+        }
+
     def get_by_asin(self, asin):
         conn = sqlite3.connect(self.CACHE_DB)
         conn.row_factory = sqlite3.Row
