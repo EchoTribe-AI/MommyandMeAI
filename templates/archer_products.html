@@ -267,6 +267,33 @@
       </div>
     </div>
 
+    <!-- PLACEMENT / UTM -->
+    <div class="sidebar-section">
+      <div class="ss-label">Platform</div>
+      <div class="filter-tag-wrap" id="placement-source-wrap">
+        <button class="filter-tag active" id="ps-facebook"  onclick="setPlacementSource('facebook')">fb</button>
+        <button class="filter-tag"        id="ps-instagram" onclick="setPlacementSource('instagram')">ig</button>
+        <button class="filter-tag"        id="ps-tiktok"    onclick="setPlacementSource('tiktok')">tt</button>
+        <button class="filter-tag"        id="ps-email"     onclick="setPlacementSource('email')">email</button>
+        <button class="filter-tag"        id="ps-steph-ai"  onclick="setPlacementSource('steph-ai')">AI</button>
+      </div>
+    </div>
+
+    <div class="sidebar-section" id="medium-section">
+      <div class="ss-label">Traffic Type</div>
+      <div class="filter-tag-wrap" id="placement-medium-wrap">
+        <!-- populated by setPlacementSource() -->
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="ss-label">Campaign Slug</div>
+      <input type="text" class="search-input" id="placement-campaign"
+             placeholder="e.g. spring-sale-2026" style="padding-left:10px;"
+             oninput="state.linkCampaign = this.value.trim()" value="mommymeai">
+      <div id="placement-preview" style="font-size:10px;color:var(--text4);margin-top:5px;font-family:var(--mono);word-break:break-all;"></div>
+    </div>
+
     <!-- SELECTION TRAY -->
     <div class="sidebar-section">
       <div class="ss-label">Selected (<span id="tray-num">0</span>)</div>
@@ -354,11 +381,37 @@
     sortBy: 'revenue',
     searchTimer: null,
     linkedCount: 0,
-    linkNetwork: 'amazon'   // amazon | archer | levanta
+    linkNetwork: 'amazon',  // amazon | archer | levanta
+    linkSource:  'facebook',
+    linkMedium:  'organic',
+    linkCampaign: 'mommymeai',
+  };
+
+  // Valid mediums per source (mirrors server VALID_PLACEMENTS)
+  const VALID_MEDIUMS = {
+    'facebook':  ['organic', 'paid'],
+    'instagram': ['organic', 'paid'],
+    'tiktok':    ['organic', 'paid'],
+    'email':     ['newsletter'],
+    'steph-ai':  ['ai-agent'],
+  };
+
+  const NETWORK_CONTENT = {
+    'amazon':  'amazon-assoc',
+    'archer':  'archer',
+    'levanta': 'levanta',
   };
 
   // ── INIT ──────────────────────────────────────────────
   window.onload = async () => {
+    // Initialize placement UI
+    setPlacementSource(state.linkSource);
+    document.getElementById('placement-campaign').value = state.linkCampaign;
+    document.getElementById('placement-campaign').addEventListener('input', e => {
+      state.linkCampaign = e.target.value.trim();
+      updatePlacementPreview();
+    });
+
     renderSkeletons('matched-loading', 12);
     await loadMatchedProducts();
     await loadCatalogPage(1);
@@ -428,6 +481,10 @@
       showToast('Link copied!');
       return;
     }
+    if (!state.linkCampaign) {
+      showToast('Enter a campaign slug before generating links');
+      return;
+    }
     btn.textContent = '⏳';
     btn.classList.add('pc-btn-loading');
     btn.disabled = true;
@@ -438,13 +495,22 @@
         body: JSON.stringify({
           asin,
           network: state.linkNetwork,
-          utm_source: state.linkNetwork === 'amazon' ? 'organic' : 'steph-ai',
-          utm_medium: state.linkNetwork === 'amazon' ? 'social' : 'ai-agent',
-          utm_campaign: 'mommymeai',
-          utm_content: asin
+          placement: {
+            source:   state.linkSource,
+            medium:   state.linkMedium,
+            campaign: state.linkCampaign,
+            term:     '',
+          }
         })
       });
       const data = await res.json();
+      if (data.error) {
+        showToast(`Error: ${data.error}`);
+        btn.textContent = 'Get Link';
+        btn.classList.remove('pc-btn-loading');
+        btn.disabled = false;
+        return;
+      }
       const url = data.genius_url || data.affiliate_url;
       if (url) {
         state.linkedAsins[asin] = url;
@@ -454,8 +520,7 @@
         card.querySelector('.pc-check').textContent = '✓';
         const ld = card.querySelector('.link-display');
         if (ld) {
-          ld.querySelector('.ld-label').textContent =
-            data.urlgenius ? `URLgenius · ${data.network}` : `${data.network} link`;
+          ld.querySelector('.ld-label').textContent = data.label || `URLgenius · ${data.network}`;
           ld.querySelector('.ld-url').textContent = url;
           ld.classList.add('visible');
         }
@@ -466,7 +531,8 @@
         btn.disabled = false;
         const trayItem = state.tray.find(t => t.asin === asin);
         if (trayItem) trayItem.link = url;
-        showToast(`URLgenius ${data.network} link copied!`);
+        const fromCache = data.from_registry ? ' (cached)' : '';
+        showToast(`${data.label || 'Link'} copied!${fromCache}`);
       }
     } catch(e) {
       btn.textContent = 'Get Link';
@@ -474,6 +540,38 @@
       btn.disabled = false;
       showToast('Link generation failed — check API');
     }
+  }
+
+  function setPlacementSource(source) {
+    state.linkSource = source;
+    document.querySelectorAll('#placement-source-wrap .filter-tag').forEach(b => {
+      b.classList.toggle('active', b.id === `ps-${source}`);
+    });
+    // Update medium options
+    const mediums = VALID_MEDIUMS[source] || [];
+    // Default to first valid medium for this source
+    if (!mediums.includes(state.linkMedium)) state.linkMedium = mediums[0];
+    const wrap = document.getElementById('placement-medium-wrap');
+    wrap.innerHTML = mediums.map(m =>
+      `<button class="filter-tag ${m === state.linkMedium ? 'active' : ''}"
+               onclick="setPlacementMedium('${m}')">${m}</button>`
+    ).join('');
+    updatePlacementPreview();
+  }
+
+  function setPlacementMedium(medium) {
+    state.linkMedium = medium;
+    document.querySelectorAll('#placement-medium-wrap .filter-tag').forEach(b => {
+      b.classList.toggle('active', b.textContent.trim() === medium);
+    });
+    updatePlacementPreview();
+  }
+
+  function updatePlacementPreview() {
+    const content = NETWORK_CONTENT[state.linkNetwork] || state.linkNetwork;
+    const campaign = state.linkCampaign || '(no campaign)';
+    document.getElementById('placement-preview').textContent =
+      `URLgenius · ${state.linkSource}/${state.linkMedium} · ${content} | ${campaign}`;
   }
 
   function setLinkNetwork(net) {
@@ -487,6 +585,7 @@
       levanta: "Levanta tracked link · Wrapped in URLgenius"
     };
     document.getElementById('ln-desc').textContent = desc[net] || '';
+    updatePlacementPreview();
   }
 
   // ── RENDER ────────────────────────────────────────────

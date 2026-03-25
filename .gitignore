@@ -16,3 +16,4 @@ wheels/
 data/archer_catalog.db
 data/Amazon_Earnings_2026.csv
 data/levanta_matches.json
+data/urlgenius_registry.json

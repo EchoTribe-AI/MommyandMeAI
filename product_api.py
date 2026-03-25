@@ -655,11 +655,65 @@ archer_api = ArcherAPI()
 
 
 class URLGeniusAPI:
-    """URLGenius deep link API client."""
+    """URLGenius deep link API client with registry-based deduplication."""
     BASE = "https://api.urlgeni.us/api/v2"
+    REGISTRY_PATH = os.path.join(os.path.dirname(__file__), 'data', 'urlgenius_registry.json')
 
     def __init__(self):
         self.api_key = os.environ.get("URLGENIUS_API_KEY", "")
+        self._registry = {}
+        self._load_registry()
+
+    # ── REGISTRY ──────────────────────────────────────────
+
+    def _registry_key(self, destination_url, utm_source='', utm_medium='',
+                      utm_campaign='', utm_content='', utm_term=''):
+        return f"{destination_url}||{utm_source}|{utm_medium}|{utm_campaign}|{utm_content}|{utm_term}"
+
+    def _load_registry(self):
+        if os.path.exists(self.REGISTRY_PATH):
+            try:
+                with open(self.REGISTRY_PATH) as f:
+                    self._registry = json.load(f)
+                logging.info(f"[URLGENIUS] Registry loaded: {len(self._registry)} links")
+            except Exception as e:
+                logging.warning(f"[URLGENIUS] Registry load failed: {e}")
+                self._registry = {}
+
+    def _save_registry(self):
+        try:
+            os.makedirs(os.path.dirname(self.REGISTRY_PATH), exist_ok=True)
+            with open(self.REGISTRY_PATH, 'w') as f:
+                json.dump(self._registry, f, indent=2)
+        except Exception as e:
+            logging.warning(f"[URLGENIUS] Registry save failed: {e}")
+
+    def seed_registry(self):
+        """Fetch all existing URLgenius links and seed the registry file."""
+        if not self.api_key:
+            return 0
+        try:
+            data = self.list_links(limit=500)
+            links = data.get('links', data if isinstance(data, list) else [])
+            n = 0
+            for link in links:
+                dest = link.get('url', '')
+                genius_url = link.get('genius_url', '')
+                if dest and genius_url:
+                    self._registry[dest] = {
+                        'genius_url': genius_url,
+                        'link_id': link.get('id'),
+                        'affiliate_url': dest,
+                    }
+                    n += 1
+            self._save_registry()
+            logging.info(f"[URLGENIUS] Registry seeded: {n} links loaded")
+            return n
+        except Exception as e:
+            logging.error(f"[URLGENIUS] Registry seed failed: {e}")
+            return 0
+
+    # ── HEADERS ───────────────────────────────────────────
 
     def _headers(self):
         return {
@@ -667,25 +721,49 @@ class URLGeniusAPI:
             "Content-Type": "application/json",
         }
 
+    # ── LINKS ─────────────────────────────────────────────
+
     def create_link(self, destination_url, utm_source=None, utm_medium=None,
-                    utm_campaign=None, utm_content=None):
+                    utm_campaign=None, utm_content=None, utm_term=None,
+                    force_new=False):
         """
-        Create a URLGenius deep link.
-        destination_url: the affiliate URL to wrap (Amazon, Walmart, etc.)
-        UTM params are embedded so attribution flows through to app stores.
+        Create a URLGenius deep link. Checks registry first to avoid duplicates.
+        Set force_new=True to always create a fresh link.
         """
+        reg_key = self._registry_key(
+            destination_url,
+            utm_source or '', utm_medium or '',
+            utm_campaign or '', utm_content or '', utm_term or ''
+        )
+        if not force_new and reg_key in self._registry:
+            logging.info(f"[URLGENIUS] Registry hit: {reg_key[:60]}")
+            return {'link': self._registry[reg_key], '_from_registry': True}
+
         payload = {"url": destination_url}
         utms = {}
         if utm_source:   utms["utm_source"]   = utm_source
         if utm_medium:   utms["utm_medium"]   = utm_medium
         if utm_campaign: utms["utm_campaign"] = utm_campaign
         if utm_content:  utms["utm_content"]  = utm_content
+        if utm_term:     utms["utm_term"]     = utm_term
         if utms:
             payload["utm"] = utms
+
         r = requests.post(f"{self.BASE}/links", headers=self._headers(),
                           json=payload, timeout=10)
         r.raise_for_status()
-        return r.json()
+        result = r.json()
+
+        link_data = result.get('link', {})
+        if link_data.get('genius_url'):
+            self._registry[reg_key] = {
+                'genius_url': link_data['genius_url'],
+                'link_id': link_data.get('id'),
+                'affiliate_url': destination_url,
+            }
+            self._save_registry()
+
+        return result
 
     def list_links(self, limit=50):
         """List all created links."""

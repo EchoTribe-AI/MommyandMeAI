@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import sqlite3
 import requests as req
 from flask import Flask, send_from_directory, request, jsonify, render_template, Response
@@ -562,35 +563,87 @@ def archer_list_campaigns():
 
 AMAZON_TAG = os.environ.get('AMAZON_AFFILIATE_TAG', 'mommymedeals-20')
 
+# Valid source × medium combinations
+VALID_PLACEMENTS = {
+    'facebook':  ['organic', 'paid'],
+    'instagram': ['organic', 'paid'],
+    'tiktok':    ['organic', 'paid'],
+    'email':     ['newsletter'],
+    'steph-ai':  ['ai-agent'],
+}
+
+# utm_content auto-derived from affiliate network (never supplied by caller)
+NETWORK_CONTENT = {
+    'amazon':  'amazon-assoc',
+    'archer':  'archer',
+    'levanta': 'levanta',
+}
+
+# Seed URLGenius registry on startup
+def _seed_urlgenius():
+    try:
+        from product_api import URLGeniusAPI
+        ug = URLGeniusAPI()
+        if ug.api_key:
+            n = ug.seed_registry()
+            import logging
+            logging.info(f"[URLGENIUS] Startup seed: {n} links loaded")
+    except Exception as e:
+        import logging
+        logging.warning(f"[URLGENIUS] Startup seed failed: {e}")
+
+_seed_urlgenius()
+
 
 @app.route('/urlgenius/smart_link', methods=['POST'])
 def urlgenius_smart_link():
     """
-    Generate a URLGenius deep link for a product.
-    Builds the affiliate URL based on chosen network:
-      amazon  → amazon.com/dp/{asin}?tag=mommymedeals-20  (default)
-      archer  → Archer attribution link wrapped in URLGenius
-      levanta → Levanta tracked link wrapped in URLGenius
-    Returns { genius_url, affiliate_url, network }
+    Generate a URLGenius deep link for a product using the full UTM attribution schema.
+    Body: {
+      asin: str,
+      network: 'amazon' | 'archer' | 'levanta',
+      placement: { source, medium, campaign, term? },
+      force_new?: bool
+    }
+    utm_content is derived automatically from network — never supplied by caller.
+    Returns { genius_url, affiliate_url, network, label, utm }
     """
+    import logging
     from product_api import ArcherAPI, LevantaAPI, URLGeniusAPI
     body = request.get_json() or {}
     asin = body.get('asin', '').strip()
-    network = body.get('network', 'amazon')   # amazon | archer | levanta
-    utm_source  = body.get('utm_source', 'steph-ai')
-    utm_medium  = body.get('utm_medium', 'ai-agent')
-    utm_campaign = body.get('utm_campaign', 'mommymeai')
-    utm_content = body.get('utm_content', asin)
+    network = body.get('network', 'amazon')
+    force_new = bool(body.get('force_new', False))
 
     if not asin:
         return jsonify({'error': 'asin is required'}), 400
 
+    # ── Validate placement ──────────────────────────────────────────────────
+    placement = body.get('placement') or {}
+    utm_source   = (placement.get('source') or '').strip().lower()
+    utm_medium   = (placement.get('medium') or '').strip().lower()
+    utm_campaign = (placement.get('campaign') or '').strip()
+    utm_term     = (placement.get('term') or '').strip()
+
+    if not utm_source or not utm_medium:
+        return jsonify({'error': 'placement.source and placement.medium are required'}), 400
+    if not utm_campaign:
+        return jsonify({'error': 'placement.campaign is required'}), 400
+
+    valid_mediums = VALID_PLACEMENTS.get(utm_source)
+    if valid_mediums is None:
+        return jsonify({'error': f'Invalid source "{utm_source}". Valid: {list(VALID_PLACEMENTS)}'}), 400
+    if utm_medium not in valid_mediums:
+        return jsonify({'error': f'Invalid medium "{utm_medium}" for source "{utm_source}". Valid: {valid_mediums}'}), 400
+
+    # ── utm_content auto-derived from network ───────────────────────────────
+    utm_content = NETWORK_CONTENT.get(network, network)
+
+    # ── Build affiliate URL ─────────────────────────────────────────────────
     affiliate_url = None
 
     if network == 'amazon':
         affiliate_url = f"https://www.amazon.com/dp/{asin}?tag={AMAZON_TAG}"
-        utm_source = body.get('utm_source', 'organic')
-        utm_medium = body.get('utm_medium', 'social')
 
     elif network == 'archer':
         a = ArcherAPI()
@@ -617,12 +670,26 @@ def urlgenius_smart_link():
     else:
         return jsonify({'error': f'Unknown network: {network}'}), 400
 
-    # Wrap in URLGenius
+    # ── Wrap in URLGenius ───────────────────────────────────────────────────
+    link_label = f"URLgenius · {utm_source}/{utm_medium} · {utm_content}"
+    utm_meta = {
+        'utm_source': utm_source,
+        'utm_medium': utm_medium,
+        'utm_campaign': utm_campaign,
+        'utm_content': utm_content,
+        'utm_term': utm_term,
+    }
+
     ug = URLGeniusAPI()
     if not ug.api_key:
-        # No URLGenius key — return raw affiliate URL as fallback
-        return jsonify({'genius_url': affiliate_url, 'affiliate_url': affiliate_url,
-                        'network': network, 'urlgenius': False})
+        return jsonify({
+            'genius_url': affiliate_url,
+            'affiliate_url': affiliate_url,
+            'network': network,
+            'label': link_label,
+            'utm': utm_meta,
+            'urlgenius': False,
+        })
     try:
         ug_result = ug.create_link(
             destination_url=affiliate_url,
@@ -630,19 +697,35 @@ def urlgenius_smart_link():
             utm_medium=utm_medium,
             utm_campaign=utm_campaign,
             utm_content=utm_content,
+            utm_term=utm_term or None,
+            force_new=force_new,
         )
-        genius_url = ug_result.get('link', {}).get('genius_url', affiliate_url)
+        link_obj = ug_result.get('link', {})
+        # registry hit returns link_obj directly as the stored dict
+        if isinstance(link_obj, dict) and link_obj.get('genius_url'):
+            genius_url = link_obj['genius_url']
+        else:
+            genius_url = link_obj.get('genius_url', affiliate_url) if isinstance(link_obj, dict) else affiliate_url
         return jsonify({
             'genius_url': genius_url,
             'affiliate_url': affiliate_url,
             'network': network,
+            'label': link_label,
+            'utm': utm_meta,
             'urlgenius': True,
-            'link_id': ug_result.get('link', {}).get('id'),
+            'from_registry': ug_result.get('_from_registry', False),
+            'link_id': link_obj.get('id') if isinstance(link_obj, dict) else None,
         })
     except Exception as e:
         logging.error(f"[URLGENIUS] smart_link failed: {e}")
-        return jsonify({'genius_url': affiliate_url, 'affiliate_url': affiliate_url,
-                        'network': network, 'urlgenius': False})
+        return jsonify({
+            'genius_url': affiliate_url,
+            'affiliate_url': affiliate_url,
+            'network': network,
+            'label': link_label,
+            'utm': utm_meta,
+            'urlgenius': False,
+        })
 
 
 @app.route('/urlgenius/test')
