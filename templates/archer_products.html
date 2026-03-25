@@ -82,6 +82,8 @@
 
   .filter-reset { font-size: 11px; color: var(--text4); background: none; border: none; cursor: pointer; padding: 0; margin-top: 4px; text-decoration: underline; }
   .filter-reset:hover { color: var(--text2); }
+  .load-more-btn { width: 100%; padding: 10px 16px; margin-top: 12px; background: var(--surface); border: 0.5px solid var(--border2); border-radius: var(--r); font-family: var(--sans); font-size: 12px; color: var(--text3); cursor: pointer; transition: all 0.15s; }
+  .load-more-btn:hover { background: var(--bg2); color: var(--text2); border-color: var(--blue-mid); }
 
   /* TRAY */
   .tray-empty { font-size: 12px; color: var(--text4); text-align: center; padding: 16px 0; }
@@ -218,6 +220,17 @@
       </div>
     </div>
 
+    <!-- NETWORK TOGGLE -->
+    <div class="sidebar-section">
+      <div class="ss-label">Network</div>
+      <div class="filter-tag-wrap">
+        <button class="filter-tag active" id="net-archer" onclick="setNetwork('archer')">🏹 Archer</button>
+        <button class="filter-tag" id="net-levanta" onclick="setNetwork('levanta')">⚡ Levanta</button>
+        <button class="filter-tag" id="net-both" onclick="setNetwork('both')">🔀 Both</button>
+      </div>
+      <div style="font-size:10px;color:var(--text4);margin-top:4px;">Matched products show ⚡ Levanta badge where Steph has Levanta access too.</div>
+    </div>
+
     <!-- FILTERS -->
     <div class="sidebar-section">
       <div class="ss-label">Category</div>
@@ -287,12 +300,16 @@
     <!-- STATS -->
     <div class="stats-bar">
       <div class="stat-item">
-        <div class="si-val" id="stat-matched">217</div>
+        <div class="si-val" id="stat-matched">—</div>
         <div class="si-label">Matched ASINs</div>
       </div>
       <div class="stat-item">
         <div class="si-val" id="stat-catalog">113K</div>
-        <div class="si-label">Archer catalog</div>
+        <div class="si-label">Archer Catalog</div>
+      </div>
+      <div class="stat-item">
+        <div class="si-val" id="stat-levanta">—</div>
+        <div class="si-label">Levanta Catalog</div>
       </div>
       <div class="stat-item">
         <div class="si-val" id="stat-selected">0</div>
@@ -300,7 +317,7 @@
       </div>
       <div class="stat-item">
         <div class="si-val" id="stat-linked">0</div>
-        <div class="si-label">Links generated</div>
+        <div class="si-label">Links Generated</div>
       </div>
     </div>
 
@@ -328,10 +345,22 @@
         <div class="sh-left">
           <div class="sh-title">Archer Catalog</div>
           <div class="sh-count" id="catalog-count">—</div>
-          <div class="sh-badge shb-catalog">Full 113K product search</div>
+          <div class="sh-badge shb-catalog">🏹 Archer 113K catalog</div>
         </div>
       </div>
       <div class="product-grid" id="catalog-grid"></div>
+    </div>
+
+    <hr class="section-divider" id="levanta-divider" style="display:none;">
+    <div id="levanta-section" style="display:none;">
+      <div class="section-head">
+        <div class="sh-left">
+          <div class="sh-title">Levanta Catalog</div>
+          <div class="sh-count" id="levanta-count">—</div>
+          <div class="sh-badge" style="background:var(--teal-light);color:var(--teal);border:0.5px solid rgba(10,107,82,0.3);">⚡ Levanta network</div>
+        </div>
+      </div>
+      <div class="product-grid" id="levanta-grid"></div>
     </div>
 
   </div>
@@ -343,9 +372,11 @@
 <script>
   // ── STATE ──────────────────────────────────────────────
   let state = {
-    matched: [],          // all 217 matched ASINs from API
+    matched: [],          // all matched ASINs from API
     filtered: [],         // currently displayed matched products
-    catalogResults: [],   // search results from catalog
+    catalogResults: [],   // Archer search results
+    levantaResults: [],   // Levanta search results
+    levantaMap: {},       // asin -> levanta product (for cross-ref badges on matched)
     tray: [],             // selected products {asin, name, commission, link}
     linkedAsins: {},      // asin -> attribution url
     searchQuery: '',
@@ -354,7 +385,14 @@
     sortBy: 'revenue',
     searchTimer: null,
     linkedCount: 0,
-    linkNetwork: 'amazon'   // amazon | archer | levanta
+    linkNetwork: 'amazon',  // amazon | archer | levanta
+    network: 'archer',      // archer | levanta | both (catalog browse toggle)
+    matchedOffset: 0,
+    matchedTotal: 0,
+    archerOffset: 0,
+    archerTotal: 0,
+    levantaOffset: 0,
+    levantaTotal: 0,
   };
 
   // ── INIT ──────────────────────────────────────────────
@@ -362,43 +400,144 @@
     renderSkeletons('matched-loading', 12);
     await loadMatchedProducts();
     await loadCatalogPage(1);
+    loadLevantaMap();  // async, re-renders matched grid when done
   };
 
   // ── API CALLS ─────────────────────────────────────────
 
-  async function loadMatchedProducts() {
+  async function loadMatchedProducts(append = false) {
     try {
-      const res = await fetch('/archer/matched');
+      const params = new URLSearchParams({ limit: 20, offset: state.matchedOffset });
+      const res = await fetch(`/archer/matched?${params}`);
       const data = await res.json();
-      state.matched = data.products || [];
+      const incoming = data.products || [];
+      state.matchedTotal = data.total || incoming.length;
+      if (append) {
+        state.matched = [...state.matched, ...incoming];
+      } else {
+        state.matched = incoming;
+        state.matchedOffset = 0;
+      }
       state.filtered = [...state.matched];
-      document.getElementById('matched-count').textContent = state.matched.length;
-      document.getElementById('stat-matched').textContent = state.matched.length;
+      document.getElementById('matched-count').textContent = state.matchedTotal;
+      document.getElementById('stat-matched').textContent = state.matchedTotal;
       renderMatchedGrid();
+      renderLoadMore('matched-grid', state.matchedOffset + incoming.length, state.matchedTotal, () => {
+        state.matchedOffset += 20;
+        loadMatchedProducts(true);
+      });
     } catch(e) {
       console.error('Failed to load matched products:', e);
       document.getElementById('matched-grid').innerHTML = '<div class="empty-state"><div class="es-icon">⚠️</div><div class="es-text">Could not load products. Check API connection.</div></div>';
     }
   }
 
-  async function loadCatalogPage(page = 1) {
+  async function loadCatalogPage(page = 1, append = false) {
     try {
+      if (!append) state.archerOffset = 0;
       const params = new URLSearchParams({
         q: state.searchQuery || '',
         category: state.category || '',
         min_commission: state.minCommission || 0,
-        limit: 24,
-        page
+        limit: 20,
+        offset: state.archerOffset,
+        network: 'archer'
       });
       const res = await fetch(`/archer/search?${params}`);
       const data = await res.json();
-      state.catalogResults = data.products || [];
-      document.getElementById('catalog-count').textContent = state.catalogResults.length;
-      document.getElementById('catalog-section').style.display = 'block';
-      document.getElementById('catalog-divider').style.display = 'block';
-      renderCatalogGrid();
+      const incoming = data.archer || data.products || [];
+      state.archerTotal = data.archer_total || incoming.length;
+      if (append) {
+        state.catalogResults = [...state.catalogResults, ...incoming];
+      } else {
+        state.catalogResults = incoming;
+      }
+      const show = state.catalogResults.length > 0 && state.network !== 'levanta';
+      document.getElementById('catalog-count').textContent = state.archerTotal;
+      document.getElementById('stat-catalog').textContent = state.archerTotal || '113K';
+      document.getElementById('catalog-section').style.display = show ? 'block' : 'none';
+      document.getElementById('catalog-divider').style.display = show ? 'block' : 'none';
+      if (show) {
+        renderCatalogGrid();
+        renderLoadMore('catalog-grid', state.archerOffset + incoming.length, state.archerTotal, () => {
+          state.archerOffset += 20;
+          loadCatalogPage(1, true);
+        });
+      }
+      // Load Levanta browse if toggle says to
+      if (state.network === 'levanta' || state.network === 'both') {
+        await loadLevantaBrowse();
+      } else {
+        document.getElementById('levanta-section').style.display = 'none';
+        document.getElementById('levanta-divider').style.display = 'none';
+      }
     } catch(e) {
       console.error('Failed to load catalog page:', e);
+    }
+  }
+
+  async function loadLevantaBrowse(append = false) {
+    try {
+      if (!append) state.levantaOffset = 0;
+      const params = new URLSearchParams({
+        q: '',
+        category: state.category || '',
+        min_commission: state.minCommission || 0,
+        limit: 20,
+        offset: state.levantaOffset,
+        network: 'levanta'
+      });
+      const res = await fetch(`/archer/search?${params}`);
+      const data = await res.json();
+      const incoming = data.levanta || [];
+      state.levantaTotal = data.levanta_total || incoming.length;
+      if (append) {
+        state.levantaResults = [...state.levantaResults, ...incoming];
+      } else {
+        state.levantaResults = incoming;
+      }
+      const show = state.levantaResults.length > 0;
+      document.getElementById('levanta-count').textContent = state.levantaTotal;
+      document.getElementById('stat-levanta').textContent = state.levantaTotal || Object.keys(state.levantaMap).length || '—';
+      document.getElementById('levanta-section').style.display = show ? 'block' : 'none';
+      document.getElementById('levanta-divider').style.display = show ? 'block' : 'none';
+      if (show) {
+        renderLevantaGrid();
+        renderLoadMore('levanta-grid', state.levantaOffset + incoming.length, state.levantaTotal, () => {
+          state.levantaOffset += 20;
+          loadLevantaBrowse(true);
+        });
+      }
+    } catch(e) {
+      console.error('Levanta browse failed:', e);
+    }
+  }
+
+  function renderLoadMore(gridId, loaded, total, loadFn) {
+    const existing = document.getElementById(gridId + '-more');
+    if (existing) existing.remove();
+    if (loaded >= total) return;
+    const btn = document.createElement('button');
+    btn.id = gridId + '-more';
+    btn.className = 'load-more-btn';
+    btn.textContent = `Load more (${total - loaded} remaining)`;
+    btn.onclick = loadFn;
+    const grid = document.getElementById(gridId);
+    if (grid) grid.after(btn);
+  }
+
+  async function loadLevantaMap() {
+    try {
+      const res = await fetch('/archer/search?q=&network=levanta&limit=100');
+      const data = await res.json();
+      state.levantaMap = {};
+      (data.levanta || []).forEach(p => {
+        if (p.asin) state.levantaMap[p.asin] = p;
+      });
+      document.getElementById('stat-levanta').textContent = Object.keys(state.levantaMap).length;
+      renderMatchedGrid();  // re-render to show Levanta badges
+    } catch(e) {
+      console.error('Levanta map load failed:', e);
     }
   }
 
@@ -406,23 +545,95 @@
     if (!query || query.length < 2) {
       document.getElementById('catalog-section').style.display = 'none';
       document.getElementById('catalog-divider').style.display = 'none';
+      document.getElementById('levanta-section').style.display = 'none';
+      document.getElementById('levanta-divider').style.display = 'none';
       return;
     }
     try {
-      const params = new URLSearchParams({ q: query, category: state.category, min_commission: state.minCommission, limit: 24 });
+      const params = new URLSearchParams({
+        q: query,
+        category: state.category,
+        min_commission: state.minCommission,
+        limit: 24,
+        network: state.network || 'both'
+      });
       const res = await fetch(`/archer/search?${params}`);
       const data = await res.json();
-      state.catalogResults = data.products || [];
-      document.getElementById('catalog-count').textContent = state.catalogResults.length;
-      document.getElementById('catalog-section').style.display = 'block';
-      document.getElementById('catalog-divider').style.display = 'block';
-      renderCatalogGrid();
+
+      // Archer section
+      const archerResults = data.archer || data.products || [];
+      state.catalogResults = archerResults;
+      state.archerTotal = data.archer_total || archerResults.length;
+      const showArcher = archerResults.length > 0 && state.network !== 'levanta';
+      document.getElementById('catalog-count').textContent = state.archerTotal;
+      document.getElementById('stat-catalog').textContent = state.archerTotal || '113K';
+      document.getElementById('catalog-section').style.display = showArcher ? 'block' : 'none';
+      document.getElementById('catalog-divider').style.display = showArcher ? 'block' : 'none';
+      if (showArcher) {
+        renderCatalogGrid();
+        renderLoadMore('catalog-grid', archerResults.length, state.archerTotal, () => {
+          state.archerOffset = archerResults.length;
+          loadMoreSearchResults('archer');
+        });
+      }
+
+      // Levanta section
+      const levantaResults = data.levanta || [];
+      state.levantaResults = levantaResults;
+      state.levantaTotal = data.levanta_total || levantaResults.length;
+      const showLevanta = levantaResults.length > 0 && state.network !== 'archer';
+      document.getElementById('levanta-count').textContent = state.levantaTotal;
+      document.getElementById('stat-levanta').textContent = state.levantaTotal || Object.keys(state.levantaMap).length || '—';
+      document.getElementById('levanta-section').style.display = showLevanta ? 'block' : 'none';
+      document.getElementById('levanta-divider').style.display = showLevanta ? 'block' : 'none';
+      if (showLevanta) {
+        renderLevantaGrid();
+        renderLoadMore('levanta-grid', levantaResults.length, state.levantaTotal, () => {
+          state.levantaOffset = levantaResults.length;
+          loadMoreSearchResults('levanta');
+        });
+      }
     } catch(e) {
-      console.error('Catalog search failed:', e);
+      console.error('Search failed:', e);
     }
   }
 
-  async function generateLink(asin, btn, card) {
+  async function loadMoreSearchResults(network) {
+    try {
+      const offset = network === 'levanta' ? state.levantaOffset : state.archerOffset;
+      const params = new URLSearchParams({
+        q: state.searchQuery,
+        category: state.category || '',
+        min_commission: state.minCommission || 0,
+        limit: 20,
+        offset,
+        network
+      });
+      const res = await fetch(`/archer/search?${params}`);
+      const data = await res.json();
+      if (network === 'archer') {
+        const incoming = data.archer || [];
+        state.catalogResults = [...state.catalogResults, ...incoming];
+        renderCatalogGrid();
+        renderLoadMore('catalog-grid', state.catalogResults.length, state.archerTotal, () => {
+          state.archerOffset += 20;
+          loadMoreSearchResults('archer');
+        });
+      } else {
+        const incoming = data.levanta || [];
+        state.levantaResults = [...state.levantaResults, ...incoming];
+        renderLevantaGrid();
+        renderLoadMore('levanta-grid', state.levantaResults.length, state.levantaTotal, () => {
+          state.levantaOffset += 20;
+          loadMoreSearchResults('levanta');
+        });
+      }
+    } catch(e) {
+      console.error('Load more search failed:', e);
+    }
+  }
+
+  async function generateLink(asin, btn, card, source) {
     if (state.linkedAsins[asin]) {
       copyToClipboard(state.linkedAsins[asin]);
       showToast('Link copied!');
@@ -495,11 +706,13 @@
     const grid = document.getElementById('matched-grid');
     let products = [...state.filtered];
 
-    // Apply category filter
+    // Apply category filter — check all possible category field names
     if (state.category) {
-      products = products.filter(p => (p.product_category || p.archer_category || p.category || '').includes(state.category));
+      products = products.filter(p =>
+        (p.product_category || p.archer_category || p.category || '').includes(state.category)
+      );
     }
-    // Apply min commission filter
+    // Apply min commission filter — check both field names
     if (state.minCommission > 0) {
       products = products.filter(p => {
         const rate = parseFloat((p.commission_payout || p.commission || '').replace('%', '')) || 0;
@@ -511,12 +724,14 @@
       products.sort((a, b) => (b.steph_revenue || 0) - (a.steph_revenue || 0));
     } else if (state.sortBy === 'commission') {
       products.sort((a, b) => {
-        const ra = parseFloat((a.commission || '').replace('%', '')) || 0;
-        const rb = parseFloat((b.commission || '').replace('%', '')) || 0;
+        const ra = parseFloat((a.commission_payout || a.commission || '').replace('%', '')) || 0;
+        const rb = parseFloat((b.commission_payout || b.commission || '').replace('%', '')) || 0;
         return rb - ra;
       });
     } else if (state.sortBy === 'rating') {
-      products.sort((a, b) => (parseFloat(b.rating) || 0) - (parseFloat(a.rating) || 0));
+      products.sort((a, b) =>
+        (parseFloat(b.avg_rating || b.rating) || 0) - (parseFloat(a.avg_rating || a.rating) || 0)
+      );
     }
 
     if (!products.length) {
@@ -535,6 +750,15 @@
     grid.innerHTML = state.catalogResults.map(p => buildCard(p, false)).join('');
   }
 
+  function renderLevantaGrid() {
+    const grid = document.getElementById('levanta-grid');
+    if (!state.levantaResults.length) {
+      grid.innerHTML = '<div class="empty-state"><div class="es-icon">🔍</div><div class="es-text">No Levanta results found.</div></div>';
+      return;
+    }
+    grid.innerHTML = state.levantaResults.map(p => buildCard(p, false)).join('');
+  }
+
   function buildCard(p, isMatched) {
     const asin = p.asin || p.ASIN || '';
     const name = p.product_name || p.name || '';
@@ -543,6 +767,11 @@
     const price = p.price || '';
     const revenue = p.steph_revenue ? `$${p.steph_revenue.toLocaleString()} Steph rev` : '';
     const rating = p.rating || p.avg_rating || '';
+    const reviews = p.total_reviews || p.reviews || '';
+    const ratingVal = p.avg_rating || p.rating || '';
+    const reviewLine = (ratingVal || reviews)
+      ? `<div style="font-size:10.5px;color:var(--text4);margin-top:3px;">${ratingVal ? `⭐ ${ratingVal}` : ''}${reviews ? ` · ${reviews} reviews` : ''}</div>`
+      : '';
     const isSelected = state.tray.some(t => t.asin === asin);
     const isLinked = !!state.linkedAsins[asin];
     const link = state.linkedAsins[asin] || '';
@@ -562,7 +791,8 @@
     return `
     <div class="product-card ${isSelected ? 'selected' : ''} ${isLinked ? 'linked' : ''}" 
          id="card-${asin}" onclick="toggleSelect('${asin}', '${escStr(name)}', '${commission}')">
-      ${isMatched ? '<div class="pc-matched-badge">✓ Matched</div>' : ''}
+      ${isMatched ? `<div class="pc-matched-badge">✓ Matched${state.levantaMap[asin] ? ' · ⚡ Levanta' : ''}</div>` : ''}
+      ${!isMatched && p.source === 'levanta' ? '<div class="pc-matched-badge" style="background:#e8f8f4;color:#0a6b52;border-color:rgba(10,107,82,0.3);">⚡ Levanta</div>' : ''}
       <div class="pc-check">${isSelected || isLinked ? '✓' : ''}</div>
       <div class="pc-image">
         ${p.image_encoded_string ?
@@ -577,6 +807,7 @@
           <div>
             <span class="pc-price">${price}</span>
             ${revenue ? `<span style="font-size:10px;color:var(--text4);display:block;margin-top:2px;">${revenue}</span>` : ''}
+            ${reviewLine}
           </div>
           <div class="pc-commission" style="${commColor}">${commission}</div>
         </div>
@@ -589,7 +820,7 @@
       <div class="pc-footer" onclick="event.stopPropagation()">
         <button class="pc-btn pc-btn-link ${isLinked ? 'pc-btn-copy copied' : ''}" 
                 id="btn-link-${asin}"
-                onclick="generateLink('${asin}', this, document.getElementById('card-${asin}'))">
+                onclick="generateLink('${asin}', this, document.getElementById('card-${asin}'), '${p.source || 'archer'}')">
           ${isLinked ? '✓ Copied' : 'Get Link'}
         </button>
         <button class="pc-btn pc-btn-copy" onclick="copyAsin('${asin}')">ASIN</button>
@@ -686,16 +917,22 @@
     state.searchQuery = val;
     document.getElementById('search-clear').classList.toggle('visible', val.length > 0);
     clearTimeout(state.searchTimer);
-    // Filter matched section immediately
     state.filtered = val
       ? state.matched.filter(p =>
           (p.product_name || p.name || '').toLowerCase().includes(val.toLowerCase()) ||
-          (p.brand || p.company_name || '').toLowerCase().includes(val.toLowerCase()) ||
+          (p.company_name || p.brand || '').toLowerCase().includes(val.toLowerCase()) ||
           (p.asin || '').toLowerCase().includes(val.toLowerCase()))
       : [...state.matched];
+    state.matchedOffset = 0;
     renderMatchedGrid();
-    // Debounce catalog search
-    state.searchTimer = setTimeout(() => searchCatalog(val), 400);
+    if (val.length >= 2) {
+      state.searchTimer = setTimeout(() => searchCatalog(val), 400);
+    } else {
+      document.getElementById('catalog-section').style.display = 'none';
+      document.getElementById('catalog-divider').style.display = 'none';
+      document.getElementById('levanta-section').style.display = 'none';
+      document.getElementById('levanta-divider').style.display = 'none';
+    }
   }
 
   function clearSearch() {
@@ -707,23 +944,50 @@
     document.getElementById('catalog-section').style.display = 'none';
     document.getElementById('catalog-divider').style.display = 'none';
     state.catalogResults = [];
+    loadCatalogPage(1);
+  }
+
+  function setNetwork(net) {
+    state.network = net;
+    ['archer', 'levanta', 'both'].forEach(n => {
+      document.getElementById(`net-${n}`)?.classList.toggle('active', n === net);
+    });
+    if (state.searchQuery) {
+      searchCatalog(state.searchQuery);
+    } else {
+      loadCatalogPage(1);
+    }
   }
 
   function setCategory(cat) {
     state.category = cat;
-    document.querySelectorAll('.filter-tag').forEach(t => {
-      t.classList.toggle('active', t.dataset.cat === cat);
-    });
+    document.querySelectorAll('.filter-tag').forEach(t =>
+      t.classList.toggle('active', t.dataset.cat === cat));
+    state.matchedOffset = 0;
     renderMatchedGrid();
-    if (state.searchQuery) searchCatalog(state.searchQuery);
-    loadCatalogPage(1);
+    if (state.searchQuery) {
+      searchCatalog(state.searchQuery);
+    } else {
+      loadCatalogPage(1);
+      if (state.network === 'levanta' || state.network === 'both') {
+        loadLevantaBrowse();
+      }
+    }
   }
 
   function applyFilters() {
     state.minCommission = parseInt(document.getElementById('min-commission').value) || 0;
     state.sortBy = document.getElementById('sort-by').value;
+    state.matchedOffset = 0;
     renderMatchedGrid();
-    loadCatalogPage(1);
+    if (state.searchQuery) {
+      searchCatalog(state.searchQuery);
+    } else {
+      loadCatalogPage(1);
+      if (state.network === 'levanta' || state.network === 'both') {
+        loadLevantaBrowse();
+      }
+    }
   }
 
   function resetFilters() {
@@ -731,6 +995,7 @@
     state.minCommission = 0;
     state.sortBy = 'revenue';
     state.searchQuery = '';
+    state.matchedOffset = 0;
     document.getElementById('search-input').value = '';
     document.getElementById('search-clear').classList.remove('visible');
     document.getElementById('min-commission').value = '0';
@@ -739,6 +1004,9 @@
     state.filtered = [...state.matched];
     renderMatchedGrid();
     loadCatalogPage(1);
+    if (state.network === 'levanta' || state.network === 'both') {
+      loadLevantaBrowse();
+    }
   }
 
   // ── UTILITIES ─────────────────────────────────────────

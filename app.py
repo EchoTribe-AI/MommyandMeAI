@@ -1,6 +1,7 @@
 import os
 import json
 import sqlite3
+import logging
 import requests as req
 from flask import Flask, send_from_directory, request, jsonify, render_template, Response
 from dotenv import load_dotenv
@@ -205,35 +206,174 @@ def archer_products():
 
 @app.route('/archer/matched')
 def archer_matched():
-    """Return all 217 matched ASINs from the SQLite cache, merged with revenue data from JSON."""
     from product_api import ArcherAPI
     a = ArcherAPI()
-    matched_json = a._load_matched_json()
-    revenue_map = {p['asin']: p for p in matched_json}
-    asins = [p['asin'] for p in matched_json]
-    products = a.get_by_asins(asins)
-    for p in products:
-        asin = p.get('asin', '')
-        if asin in revenue_map:
-            p['steph_revenue'] = revenue_map[asin].get('steph_revenue', 0)
-            p['steph_units'] = revenue_map[asin].get('steph_units', 0)
-    if not products:
-        products = matched_json
-    return jsonify({'products': products})
+    limit = int(request.args.get('limit', 20))
+    offset = int(request.args.get('offset', 0))
+    products = a.get_matched_products_enriched()
+    total = len(products)
+    page = products[offset:offset + limit]
+    return jsonify({'products': page, 'total': total, 'has_more': offset + limit < total})
 
 @app.route('/archer/search')
 def archer_search():
-    """Search the Archer catalog SQLite cache."""
-    from product_api import ArcherAPI
-    q = request.args.get('q', '')
+    """Search Archer and/or Levanta catalogs. Supports network=archer|levanta|both."""
+    from product_api import ArcherAPI, LevantaAPI
+    q = request.args.get('q', '').strip()
     category = request.args.get('category', '')
     min_commission = int(request.args.get('min_commission', 0))
-    limit = int(request.args.get('limit', 24))
-    a = ArcherAPI()
-    results = a.search_catalog(q, category=category or None, limit=limit)
-    if min_commission > 0:
-        results = [p for p in results if float((p.get('commission_payout') or '0').replace('%', '') or 0) >= min_commission]
-    return jsonify({'products': results})
+    limit = min(int(request.args.get('limit', 20)), 20)
+    offset = int(request.args.get('offset', 0))
+    network = request.args.get('network', 'archer')
+
+    results = []
+
+    if network in ('archer', 'both'):
+        a = ArcherAPI()
+        archer_results = a.search_catalog(q, category=category or None, limit=limit)
+        # Supplement from matched JSON when SQLite is sparse
+        if len(archer_results) < limit:
+            matched = a._load_matched_json()
+            q_lower = q.lower() if q else ''
+            existing_asins = {r['asin'] for r in archer_results}
+            for p in matched:
+                if p.get('asin') in existing_asins:
+                    continue
+                cat_lower = category.lower() if category else ''
+                name_match = q_lower and (q_lower in (p.get('product_name') or '').lower() or
+                    q_lower in (p.get('brand') or '').lower())
+                cat_match = cat_lower and cat_lower in (p.get('archer_category') or '').lower()
+                if name_match or cat_match or (not q_lower and not cat_lower):
+                    archer_results.append({
+                        'asin': p.get('asin'),
+                        'product_name': p.get('product_name'),
+                        'company_name': p.get('brand'),
+                        'commission_payout': p.get('commission'),
+                        'product_category': p.get('archer_category'),
+                        'price': p.get('price'),
+                        'avg_rating': p.get('rating'),
+                        'steph_revenue': p.get('steph_revenue'),
+                        'source': 'archer'
+                    })
+                if len(archer_results) >= limit:
+                    break
+        if min_commission > 0:
+            archer_results = [p for p in archer_results if
+                float((p.get('commission_payout') or '0').replace('%', '') or 0) >= min_commission]
+        for p in archer_results:
+            p['source'] = 'archer'
+        results.extend(archer_results)
+
+    levanta_formatted = []
+    if network in ('levanta', 'both'):
+        lv = LevantaAPI()
+        try:
+            if q:
+                lv_raw_list = lv.search_products(q, limit=limit)
+            else:
+                # Browse mode — top accessible products by commission descending, up to limit
+                data = lv.get_products(limit=200)
+                lv_raw_list = sorted(
+                    [p for p in data.get('products', []) if p.get('access') is True],
+                    key=lambda p: p.get('commission', 0),
+                    reverse=True
+                )[:limit]
+            formatted = [lv.format_for_frontend(p) for p in lv_raw_list]
+            if min_commission > 0:
+                formatted = [p for p in formatted if
+                    float((p.get('commission_payout') or '0').replace('%', '') or 0) >= min_commission]
+            levanta_formatted = formatted
+        except Exception as e:
+            logging.error(f"[LEVANTA] Search/browse failed: {e}")
+
+    return jsonify({
+        'products': (results + levanta_formatted)[offset:offset + limit],
+        'archer': results[offset:offset + limit],
+        'archer_total': len(results),
+        'levanta': levanta_formatted[offset:offset + limit],
+        'levanta_total': len(levanta_formatted),
+    })
+
+@app.route('/archer/levanta_match_scan')
+def archer_levanta_match_scan():
+    """
+    Read all ASINs from Steph's Amazon earnings CSV, cross-reference
+    against accessible Levanta products, and save matches to data/levanta_matches.json.
+    """
+    import csv
+    from product_api import LevantaAPI
+
+    CSV_PATH = os.path.join(os.path.dirname(__file__), 'data', 'Amazon_Earnings_2026.csv')
+    OUT_PATH = os.path.join(os.path.dirname(__file__), 'data', 'levanta_matches.json')
+
+    if not os.path.exists(CSV_PATH):
+        return jsonify({'error': 'Amazon_Earnings_2026.csv not found in data/'}), 404
+
+    # Read CSV — row 1 is report title (skip), row 2 is headers
+    steph_asins = {}  # asin -> {revenue, units, name, category}
+    with open(CSV_PATH, newline='', encoding='utf-8-sig') as f:
+        next(f)  # skip "Fee-Earnings reports from..." title row
+        reader = csv.DictReader(f)
+        for row in reader:
+            asin = (row.get('ASIN') or '').strip()
+            if not asin:
+                continue
+            try:
+                revenue = float(row.get('Revenue($)') or 0)
+                units = int(row.get('Items Shipped') or 0)
+            except (ValueError, TypeError):
+                revenue, units = 0, 0
+            if asin in steph_asins:
+                steph_asins[asin]['revenue'] += revenue
+                steph_asins[asin]['units'] += units
+            else:
+                steph_asins[asin] = {
+                    'name': (row.get('Name') or '').strip(),
+                    'category': (row.get('Category') or '').strip(),
+                    'revenue': revenue,
+                    'units': units,
+                }
+
+    # Fetch all accessible Levanta ASINs
+    lv = LevantaAPI()
+    try:
+        levanta_map = lv.get_all_accessible_asins()
+    except Exception as e:
+        logging.error(f"[LEVANTA] get_all_accessible_asins failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+    # Find matches
+    matches = []
+    for asin, steph in steph_asins.items():
+        if asin in levanta_map:
+            lv_data = levanta_map[asin]
+            matches.append({
+                'asin': asin,
+                'name': steph['name'],
+                'category': steph['category'],
+                'steph_revenue': round(steph['revenue'], 2),
+                'steph_units': steph['units'],
+                'levanta_commission': lv_data['commission_pct'],
+                'levanta_commission_rate': lv_data['commission'],
+                'levanta_title': lv_data['title'],
+                'levanta_brand': lv_data['brand'],
+            })
+
+    # Sort by Steph's revenue descending
+    matches.sort(key=lambda x: x['steph_revenue'], reverse=True)
+
+    # Save to file
+    with open(OUT_PATH, 'w') as f:
+        json.dump(matches, f, indent=2)
+
+    return jsonify({
+        'steph_asins': len(steph_asins),
+        'levanta_asins': len(levanta_map),
+        'matches_found': len(matches),
+        'top_matches': matches[:10],
+        'saved_to': 'data/levanta_matches.json',
+    })
+
 
 @app.route('/archer/backfill_images')
 def archer_backfill_images():
@@ -567,20 +707,18 @@ AMAZON_TAG = os.environ.get('AMAZON_AFFILIATE_TAG', 'mommymedeals-20')
 def urlgenius_smart_link():
     """
     Generate a URLGenius deep link for a product.
-    Builds the affiliate URL based on chosen network:
-      amazon  → amazon.com/dp/{asin}?tag=mommymedeals-20  (default)
-      archer  → Archer attribution link wrapped in URLGenius
-      levanta → Levanta tracked link wrapped in URLGenius
-    Returns { genius_url, affiliate_url, network }
+    amazon → amazon.com/dp/{asin}?tag=mommymedeals-20
+    archer → Archer attribution link wrapped in URLGenius
+    levanta → Levanta tracked link wrapped in URLGenius
     """
     from product_api import ArcherAPI, LevantaAPI, URLGeniusAPI
     body = request.get_json() or {}
     asin = body.get('asin', '').strip()
-    network = body.get('network', 'amazon')   # amazon | archer | levanta
-    utm_source  = body.get('utm_source', 'steph-ai')
-    utm_medium  = body.get('utm_medium', 'ai-agent')
+    network = body.get('network', 'amazon')
+    utm_source   = body.get('utm_source', 'steph-ai')
+    utm_medium   = body.get('utm_medium', 'ai-agent')
     utm_campaign = body.get('utm_campaign', 'mommymeai')
-    utm_content = body.get('utm_content', asin)
+    utm_content  = body.get('utm_content', asin)
 
     if not asin:
         return jsonify({'error': 'asin is required'}), 400
@@ -617,10 +755,8 @@ def urlgenius_smart_link():
     else:
         return jsonify({'error': f'Unknown network: {network}'}), 400
 
-    # Wrap in URLGenius
     ug = URLGeniusAPI()
     if not ug.api_key:
-        # No URLGenius key — return raw affiliate URL as fallback
         return jsonify({'genius_url': affiliate_url, 'affiliate_url': affiliate_url,
                         'network': network, 'urlgenius': False})
     try:
@@ -647,7 +783,6 @@ def urlgenius_smart_link():
 
 @app.route('/urlgenius/test')
 def urlgenius_test():
-    """Quick connectivity test — creates one deep link and returns the result."""
     from product_api import URLGeniusAPI
     ug = URLGeniusAPI()
     if not ug.api_key:
@@ -655,10 +790,8 @@ def urlgenius_test():
     try:
         result = ug.create_link(
             destination_url="https://www.amazon.com/dp/B0C84VRPWL",
-            utm_source="steph-ai",
-            utm_medium="ai-agent",
-            utm_campaign="mommymeai-test",
-            utm_content="B0C84VRPWL"
+            utm_source="steph-ai", utm_medium="ai-agent",
+            utm_campaign="mommymeai-test", utm_content="B0C84VRPWL"
         )
         return jsonify({'status': 'connected', 'result': result})
     except Exception as e:
@@ -667,10 +800,6 @@ def urlgenius_test():
 
 @app.route('/urlgenius/create_link', methods=['POST'])
 def urlgenius_create_link():
-    """
-    Create a URLGenius deep link for any affiliate URL.
-    Body: { url, utm_source, utm_medium, utm_campaign, utm_content }
-    """
     from product_api import URLGeniusAPI
     body = request.get_json() or {}
     url = body.get('url', '').strip()
@@ -694,7 +823,6 @@ def urlgenius_create_link():
 
 @app.route('/urlgenius/links')
 def urlgenius_list_links():
-    """List all URLGenius links."""
     from product_api import URLGeniusAPI
     ug = URLGeniusAPI()
     if not ug.api_key:
@@ -704,6 +832,64 @@ def urlgenius_list_links():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+# ── LEVANTA ───────────────────────────────────────────────────────────────────
+
+@app.route('/levanta/generate_link', methods=['POST'])
+def levanta_generate_link():
+    from product_api import LevantaAPI
+    data = request.get_json() or {}
+    asin = data.get('asin', '').strip()
+    label = data.get('label', asin)
+    if not asin:
+        return jsonify({'error': 'asin is required'}), 400
+    lv = LevantaAPI()
+    try:
+        result = lv.create_product_link(asin, source_id=label)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/levanta/deals')
+def levanta_deals():
+    from product_api import LevantaAPI
+    lv = LevantaAPI()
+    try:
+        return jsonify(lv.get_deals())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/webhooks/levanta', methods=['POST'])
+def levanta_webhook():
+    """Receive real-time Levanta events."""
+    import hmac as hmac_lib, hashlib
+    secret = os.environ.get('LEVANTA_WEBHOOK_SECRET', '')
+    sig_header = request.headers.get('x-levanta-hmac-sha256', '')
+    if secret:
+        expected = hmac_lib.new(
+            secret.encode(), request.get_data(), hashlib.sha256
+        ).hexdigest()
+        if not hmac_lib.compare_digest(expected, sig_header):
+            return jsonify({'error': 'Invalid signature'}), 401
+
+    event = request.get_json() or {}
+    event_type = event.get('type', '')
+    data = event.get('data', {})
+    logging.info(f"[LEVANTA WEBHOOK] Event: {event_type} | Data: {data}")
+
+    if event_type == 'product.access.gained':
+        asin = data.get('asin')
+        logging.info(f"[LEVANTA] New product access: {asin} at {data.get('commission', 0) * 100:.0f}%")
+    elif event_type == 'link.disabled':
+        logging.warning(f"[LEVANTA] Link disabled: {data.get('id')}")
+    elif event_type == 'product.added':
+        logging.info(f"[LEVANTA] New product in catalog: {data.get('asin')}")
+    elif event_type == 'product.removed':
+        logging.warning(f"[LEVANTA] Product removed: {data.get('asin')}")
+
+    return jsonify({'received': True})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true')
