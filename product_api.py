@@ -307,7 +307,8 @@ class ArcherNetworkMatcher(NetworkMatcher):
         if not os.path.exists(self.db_path):
             return set()
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
             rows = conn.execute(
                 "SELECT asin FROM products WHERE product_status='active' OR product_status IS NULL"
             ).fetchall()
@@ -389,9 +390,15 @@ class ArcherAPI:
 
     # ── CATALOG CACHE ─────────────────────────────────────
 
+    def _db_connect(self, timeout=30):
+        """Open a DB connection with WAL mode and a lock timeout."""
+        conn = sqlite3.connect(self.CACHE_DB, timeout=timeout)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
     def _init_cache(self):
         os.makedirs("data", exist_ok=True)
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 asin TEXT PRIMARY KEY,
@@ -460,7 +467,7 @@ class ArcherAPI:
         """Seed SQLite from matched_asins.json if DB is empty."""
         if not os.path.exists(self.MATCHED_ASINS_PATH):
             return
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
         count = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
         if count > 0:
             conn.close()
@@ -494,7 +501,7 @@ class ArcherAPI:
         and Levanta API. If a product exists in both, return both commission rates.
         """
         matched = self._load_matched_json()
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
         conn.row_factory = sqlite3.Row
 
         results = []
@@ -543,7 +550,7 @@ class ArcherAPI:
         return results
 
     def _cache_is_fresh(self):
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
         row = conn.execute(
             "SELECT value FROM cache_meta WHERE key='last_full_sync'"
         ).fetchone()
@@ -561,7 +568,7 @@ class ArcherAPI:
 
         logging.info("[ARCHER] Starting full catalog sync...")
         page, limit, total_synced = 1, 100, 0
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
 
         while True:
             try:
@@ -619,7 +626,7 @@ class ArcherAPI:
 
     def search_catalog(self, query, category=None, limit=5):
         """Search local SQLite cache, prioritizing Steph's highest-revenue products."""
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
         conn.row_factory = sqlite3.Row
 
         sql = """
@@ -646,7 +653,7 @@ class ArcherAPI:
 
     def backfill_images(self, asins):
         """Fetch live product data for a list of ASINs and update image URLs in cache."""
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
         updated = 0
         for asin in asins:
             try:
@@ -767,7 +774,7 @@ class ArcherAPI:
         archer_asins = [a for a in asin_list if a in network_sets.get('archer', set())]
         archer_map = {}
         if archer_asins:
-            conn = sqlite3.connect(self.CACHE_DB)
+            conn = self._db_connect()
             conn.row_factory = sqlite3.Row
             ph = ','.join('?' * len(archer_asins))
             rows = conn.execute(
@@ -845,7 +852,7 @@ class ArcherAPI:
         return meta
 
     def get_by_asin(self, asin):
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT * FROM products WHERE asin = ?", (asin,)
@@ -856,7 +863,7 @@ class ArcherAPI:
     def get_by_asins(self, asin_list):
         if not asin_list:
             return []
-        conn = sqlite3.connect(self.CACHE_DB)
+        conn = self._db_connect()
         conn.row_factory = sqlite3.Row
         placeholders = ",".join("?" * len(asin_list))
         rows = conn.execute(
