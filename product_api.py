@@ -984,6 +984,9 @@ class ArcherAPI:
         )
 
         # Levanta brand expansion
+        # Collect brands from ANY direct earnings ASIN match (Archer or Levanta).
+        # A direct match = earnings ASIN was in a network catalog (not brand-expanded).
+        # If we know Steph sells Brand X on Amazon, check all networks for Brand X.
         lv_cache = {}
         try:
             with open(self.LEVANTA_CACHE_PATH) as f:
@@ -993,7 +996,13 @@ class ArcherAPI:
 
         direct_levanta_brands = set()
         for entry in results:
-            if entry.get('levanta_matched') and not entry.get('archer_brand_match') and entry.get('brand'):
+            if entry['asin'] not in earnings_asin_set or not entry.get('brand'):
+                continue
+            is_direct = (
+                (entry.get('archer_matched')  and not entry.get('archer_brand_match')) or
+                (entry.get('levanta_matched') and not entry.get('levanta_brand_match'))
+            )
+            if is_direct:
                 direct_levanta_brands.add(entry['brand'].lower().strip())
 
         levanta_brand_index = {}
