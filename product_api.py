@@ -784,7 +784,10 @@ class ArcherAPI:
         with open(path, newline='', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                asin = row.get('Product ASIN', '').strip()
+                # Support both Amazon report formats:
+                # Format A: "Product ASIN", "Total Earnings", "Items Returned"
+                # Format B: "ASIN", "Revenue($)", "Returns"
+                asin = (row.get('Product ASIN') or row.get('ASIN') or '').strip()
                 if not asin:
                     continue
                 row_data = {
@@ -794,10 +797,12 @@ class ArcherAPI:
                     'conversion_rate':        row.get('Product Conversion Rate', '').strip(),
                     'amazon_commission_rate': row.get('Commission Rate', '').strip(),
                     'items_shipped':          int(clean_num(row.get('Items Shipped', '0'))),
-                    'items_returned':         int(clean_num(row.get('Items Returned', '0'))),
+                    'items_returned':         int(clean_num(row.get('Items Returned') or row.get('Returns', '0'))),
                     'shipped_revenue':        clean_num(row.get('Items Shipped Revenue', '0')),
-                    'total_earnings':         clean_num(row.get('Total Earnings', '0')),
+                    'total_earnings':         clean_num(row.get('Total Earnings') or row.get('Revenue($)', '0')),
                     'time_period':            row.get('Time Period', '').strip(),
+                    'brand':                  (row.get('Brand') or '').strip(),
+                    'product_name':           (row.get('Title') or row.get('Product Title') or '').strip(),
                 }
                 if asin in earnings:
                     # Aggregate same ASIN across multiple time periods
@@ -806,6 +811,11 @@ class ArcherAPI:
                         earnings[asin][k] += row_data[k]
                     earnings[asin]['shipped_revenue'] += row_data['shipped_revenue']
                     earnings[asin]['total_earnings']  += row_data['total_earnings']
+                    # Keep first non-empty brand/name seen
+                    if not earnings[asin]['brand'] and row_data['brand']:
+                        earnings[asin]['brand'] = row_data['brand']
+                    if not earnings[asin]['product_name'] and row_data['product_name']:
+                        earnings[asin]['product_name'] = row_data['product_name']
                 else:
                     earnings[asin] = row_data
 
@@ -883,7 +893,13 @@ class ArcherAPI:
                 **{f'{n}_matched': (asin in s) for n, s in network_sets.items()},
             }
 
-            # Enrich from Archer catalog CSV data if matched
+            # Seed brand/name from earnings CSV (present in some report formats)
+            if e.get('brand'):
+                entry.setdefault('brand', e['brand'])
+            if e.get('product_name'):
+                entry.setdefault('product_name', e['product_name'])
+
+            # Enrich from Archer catalog CSV data if directly matched
             archer_csv = network_data.get('archer', {}).get(asin)
             if archer_csv:
                 entry.update({
@@ -907,6 +923,30 @@ class ArcherAPI:
                     entry['brand'] = lv_data.get('brand', '')
 
             results.append(entry)
+
+        # ── Brand-level Archer matching ───────────────────────────────────────
+        # For earnings ASINs not directly in Archer, check if their brand
+        # appears in the Archer catalog (catches brand partners sold under
+        # different ASINs than the ones Archer has indexed).
+        archer_brands = {}
+        for asin_val, meta in network_data.get('archer', {}).items():
+            b = (meta.get('brand') or '').lower().strip()
+            if b:
+                archer_brands.setdefault(b, set()).add(asin_val)
+
+        brand_match_count = 0
+        for entry in results:
+            if entry.get('archer_matched'):
+                continue  # already a direct ASIN match
+            brand = (entry.get('brand') or '').lower().strip()
+            if brand and brand in archer_brands:
+                entry['archer_matched'] = True
+                entry['archer_brand_match'] = True
+                if 'archer' not in entry['networks']:
+                    entry['networks'].append('archer')
+                brand_match_count += 1
+
+        logging.info(f'[SCAN] Brand-level Archer matches added: {brand_match_count}')
 
         # Sort: most networks first, then by total earnings
         results.sort(key=lambda x: (-len(x['networks']), -x['total_earnings']))
