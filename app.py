@@ -264,18 +264,23 @@ def archer_force_rescan():
 
 @app.route('/levanta/diag')
 def levanta_diag():
-    """Diagnostic: show raw Levanta API product shape to verify field names."""
+    """Diagnostic: show raw Levanta API product + brand shapes to verify field names."""
     from product_api import LevantaAPI
     lv = LevantaAPI()
     if not lv.api_key:
         return jsonify({'error': 'No LEVANTA_API_KEY set'})
     try:
-        data = lv.get_products(limit=3)
-        products = data.get('products', [])
+        products_data = lv.get_products(limit=3)
+        products = products_data.get('products', [])
+        brands_data = lv.get_brands(access_only=False, limit=3)
+        brands = (brands_data.get('brands') or brands_data.get('data') or
+                  brands_data.get('items') or [])
         return jsonify({
-            'total_returned': len(products),
-            'sample': products[:3],
-            'keys_in_first': list(products[0].keys()) if products else [],
+            'products_sample': products[:3],
+            'products_keys': list(products[0].keys()) if products else [],
+            'brands_raw_keys': list(brands_data.keys()),
+            'brands_sample': brands[:3],
+            'brands_keys': list(brands[0].keys()) if brands else [],
         })
     except Exception as e:
         return jsonify({'error': str(e)})
@@ -379,26 +384,31 @@ def archer_search():
         lv = LevantaAPI()
         try:
             if q:
+                # search_products already resolves brand names onto each product
                 lv_raw_list = lv.search_products(q, limit=limit)
             else:
                 # Browse mode — paginate through full catalog, up to 500 accessible products
+                brand_lookup = lv.get_brand_lookup()
                 lv_raw_list = []
                 cursor = None
                 while len(lv_raw_list) < 500:
                     data = lv.get_products(limit=100, cursor=cursor)
                     products = data.get('products', [])
-                    lv_raw_list.extend([p for p in products if p.get('access') is True])
+                    for p in products:
+                        if p.get('access') is True:
+                            p['brand'] = brand_lookup.get(p.get('brandId', ''), '')
+                            lv_raw_list.append(p)
                     cursor = data.get('cursor')
                     if not cursor or not products:
                         break
                 lv_raw_list = sorted(lv_raw_list, key=lambda p: p.get('commission', 0), reverse=True)
 
-            # Apply filters before slicing
+            # Apply filters before slicing (brand now available as p['brand'])
             if q:
                 q_lower = q.lower()
                 lv_raw_list = [p for p in lv_raw_list if
                     q_lower in (p.get('title') or '').lower() or
-                    q_lower in (p.get('brandName') or '').lower() or
+                    q_lower in (p.get('brand') or '').lower() or
                     q_lower in (p.get('asin') or '').lower()]
             if category:
                 lv_raw_list = [p for p in lv_raw_list if

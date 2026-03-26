@@ -1260,7 +1260,7 @@ class LevantaAPI:
         return {
             "asin": product.get("asin", ""),
             "product_name": product.get("title") or product.get("name") or "",
-            "company_name": product.get("brandName") or product.get("brand") or "",
+            "company_name": product.get("brand") or product.get("brandName") or "",
             "price": f"${price}" if price else "",
             "commission_payout": commission_str,
             "image_encoded_string": product.get("image") or product.get("imageUrl") or "",
@@ -1272,11 +1272,35 @@ class LevantaAPI:
             "deal": product.get("deal") or {}
         }
 
+    def get_brand_lookup(self):
+        """
+        Fetch all Levanta brands and return a dict of brandId -> brand name.
+        Products only carry a brandId UUID, so we need this to get human-readable names.
+        """
+        brand_lookup = {}
+        try:
+            data = self.get_brands(access_only=False, limit=200)
+            # API may return brands under different keys
+            brands = (data.get('brands') or data.get('data') or
+                      data.get('items') or [])
+            for b in brands:
+                bid  = b.get('id') or b.get('brandId') or b.get('uuid') or ''
+                name = b.get('name') or b.get('brandName') or b.get('displayName') or ''
+                if bid and name:
+                    brand_lookup[bid] = name
+            logging.info(f'[LEVANTA] Brand lookup built: {len(brand_lookup)} brands')
+        except Exception as e:
+            logging.warning(f'[LEVANTA] Brand lookup failed: {e}')
+        return brand_lookup
+
     def get_all_accessible_asins(self):
         """
         Page through all Levanta products and return a dict of
-        asin -> {commission, title, brandName} for accessible products only.
+        asin -> {commission, commission_pct, title, brand} for accessible products only.
+        Brand name is resolved via brandId → brands endpoint lookup.
         """
+        brand_lookup = self.get_brand_lookup()
+
         asin_map = {}
         cursor = None
         pages = 0
@@ -1287,23 +1311,29 @@ class LevantaAPI:
                 if p.get("access") is True:
                     asin = p.get("asin")
                     if asin:
+                        brand_id   = p.get("brandId", "")
+                        brand_name = brand_lookup.get(brand_id, "")
                         asin_map[asin] = {
-                            "commission": p.get("commission", 0),
+                            "commission":     p.get("commission", 0),
                             "commission_pct": f"{int(p.get('commission', 0) * 100)}%",
-                            "title": p.get("title") or p.get("name") or "",
-                            "brand": p.get("brandName") or p.get("brand") or "",
+                            "title":          p.get("title") or p.get("name") or "",
+                            "brand":          brand_name,
+                            "brand_id":       brand_id,
                         }
             cursor = data.get("cursor")
             if not cursor or not products:
                 break
             pages += 1
+        logging.info(f'[LEVANTA] get_all_accessible_asins: {len(asin_map)} accessible products')
         return asin_map
 
     def search_products(self, query, limit=24):
         """
         Levanta doesn't have a search endpoint — pull products and filter locally.
         Returns products filtered by query match on title/brand/asin.
+        Brand names are resolved via brandId lookup.
         """
+        brand_lookup = self.get_brand_lookup()
         results = []
         cursor = None
         pages = 0
@@ -1311,10 +1341,13 @@ class LevantaAPI:
             data = self.get_products(limit=100, cursor=cursor)
             products = data.get("products", [])
             for p in products:
+                # Resolve brand name and attach it so format_for_frontend can use it
+                brand_id   = p.get("brandId", "")
+                brand_name = brand_lookup.get(brand_id, "")
+                p["brand"]  = brand_name  # attach resolved name onto product dict
                 title = (p.get("title") or p.get("name") or "").lower()
-                brand = (p.get("brandName") or p.get("brand") or "").lower()
-                asin = (p.get("asin") or "").lower()
-                if query.lower() in title or query.lower() in brand or query.lower() in asin:
+                asin  = (p.get("asin") or "").lower()
+                if query.lower() in title or query.lower() in brand_name.lower() or query.lower() in asin:
                     results.append(p)
             cursor = data.get("cursor")
             if not cursor or not products:
