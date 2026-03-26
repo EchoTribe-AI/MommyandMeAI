@@ -302,72 +302,76 @@ class NetworkMatcher:
 
 class ArcherNetworkMatcher(NetworkMatcher):
     """
-    Reads the full Archer catalog from the local CSV file.
-    Falls back to SQLite if the CSV is not present.
-    API calls are only made later, on-demand, to fetch images/details for matched ASINs.
+    Reads the full Archer catalog from a local CSV file (primary source).
+    Tries multiple known filenames so it works on both Mac and Replit.
+    SQLite is only used for image lookups, not catalog membership.
     """
     name = 'archer'
-    CATALOG_CSV = 'data/Archer Full Catalog 2026.csv'
+    CATALOG_CSV_PATHS = [
+        'data/Archer Full Catalog 2026.csv',
+        'data/EchoTribe_x_Archer_Attribution_Product_Catalog__Archer_Full_Product_Catalog_1.csv',
+    ]
 
-    def __init__(self, db_path):
+    def __init__(self, db_path=None):
         self.db_path = db_path
+
+    def _open_catalog_csv(self):
+        """Return (path, file_handle) for the first found catalog CSV, or (None, None)."""
+        import csv as _csv
+        for path in self.CATALOG_CSV_PATHS:
+            if os.path.exists(path):
+                return path, open(path, newline='', encoding='utf-8-sig')
+        return None, None
+
+    def get_asin_set(self) -> set:
+        import csv as _csv
+        path, fh = self._open_catalog_csv()
+        if fh is None:
+            logging.warning('[ARCHER] No catalog CSV found — get_asin_set returns empty')
+            return set()
+        try:
+            asins = set()
+            for raw_row in _csv.DictReader(fh):
+                asin = raw_row.get('ASIN', '').strip()
+                if asin:
+                    asins.add(asin)
+            logging.info(f'[ARCHER] get_asin_set: {len(asins)} ASINs from {path}')
+            return asins
+        except Exception as e:
+            logging.warning(f'[ARCHER] get_asin_set CSV read failed: {e}')
+            return set()
+        finally:
+            fh.close()
 
     def get_asin_data(self) -> dict:
         import csv as _csv
-        if os.path.exists(self.CATALOG_CSV):
+        path, fh = self._open_catalog_csv()
+        if fh is not None:
             try:
                 data = {}
-                with open(self.CATALOG_CSV, newline='', encoding='utf-8-sig') as f:
-                    for raw_row in _csv.DictReader(f):
-                        # Strip whitespace from keys (CSV headers have trailing spaces)
-                        row = {k.strip(): v for k, v in raw_row.items()}
-                        asin = (row.get('ASIN') or '').strip()
-                        if not asin:
-                            continue
-                        data[asin] = {
-                            'product_name':    (row.get('Product Titile') or row.get('Product Title') or '').strip(),
-                            'brand':           (row.get('Brand') or '').strip(),
-                            'price':           (row.get('Product Price') or '').strip(),
-                            'commission':      (row.get('Affiliate Commission Payout') or '').strip(),
-                            'archer_category': (row.get('Category') or '').strip(),
-                            'reviews':         (row.get('Total Reviews') or '').strip(),
-                            'rating':          (row.get('Average Rating') or '').strip(),
-                        }
-                logging.info(f"[ARCHER] get_asin_data: {len(data)} ASINs from catalog CSV")
+                for raw_row in _csv.DictReader(fh):
+                    row = {k.strip(): v for k, v in raw_row.items()}
+                    asin = (row.get('ASIN') or '').strip()
+                    if not asin:
+                        continue
+                    data[asin] = {
+                        'product_name':    (row.get('Product Titile') or row.get('Product Title') or '').strip(),
+                        'brand':           (row.get('Brand') or '').strip(),
+                        'price':           (row.get('Product Price') or '').strip(),
+                        'commission':      (row.get('Affiliate Commission Payout') or '').strip(),
+                        'archer_category': (row.get('Category') or '').strip(),
+                        'reviews':         (row.get('Total Reviews') or '').strip(),
+                        'rating':          (row.get('Average Rating') or '').strip(),
+                    }
+                logging.info(f'[ARCHER] get_asin_data: {len(data)} ASINs from {path}')
                 return data
             except Exception as e:
-                logging.warning(f"[ARCHER] CSV read failed, falling back to SQLite: {e}")
+                logging.warning(f'[ARCHER] CSV read failed: {e}')
+            finally:
+                fh.close()
 
-        # Fallback: SQLite catalog
-        if not os.path.exists(self.db_path):
-            return {}
-        try:
-            conn = sqlite3.connect(self.db_path, timeout=30)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT asin, product_name, company_name, price, commission_payout, "
-                "product_category, total_reviews, avg_rating FROM products "
-                "WHERE product_status='active' OR product_status IS NULL"
-            ).fetchall()
-            conn.close()
-            data = {}
-            for r in rows:
-                if r['asin']:
-                    data[r['asin']] = {
-                        'product_name':    r['product_name'] or '',
-                        'brand':           r['company_name'] or '',
-                        'price':           r['price'] or '',
-                        'commission':      r['commission_payout'] or '',
-                        'archer_category': r['product_category'] or '',
-                        'reviews':         r['total_reviews'] or '',
-                        'rating':          r['avg_rating'] or '',
-                    }
-            logging.info(f"[ARCHER] get_asin_data: {len(data)} ASINs from SQLite fallback")
-            return data
-        except Exception as e:
-            logging.warning(f"[ARCHER] get_asin_set failed: {e}")
-            return {}
+        logging.warning('[ARCHER] No catalog CSV found — catalog will be empty')
+        return {}
 
 
 class LevantaNetworkMatcher(NetworkMatcher):
@@ -844,7 +848,7 @@ class ArcherAPI:
 
         # ── Register networks here — add new ones as more are onboarded ──────
         matchers = [
-            ArcherNetworkMatcher(self.CACHE_DB),
+            ArcherNetworkMatcher(db_path=self.CACHE_DB),
             LevantaNetworkMatcher(),
             # ImpactNetworkMatcher(), CJNetworkMatcher(), etc.
         ]
