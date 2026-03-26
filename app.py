@@ -1092,6 +1092,21 @@ def levanta_generate_link():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/levanta/refresh_cache')
+def levanta_refresh_cache():
+    """Rebuild network_cache_levanta.json from live API (brand names + images included)."""
+    from product_api import LevantaNetworkMatcher
+    try:
+        matcher = LevantaNetworkMatcher()
+        asin_map = matcher.get_asin_data()
+        if not asin_map:
+            return jsonify({'error': 'No data returned — check LEVANTA_API_KEY'}), 500
+        brands = len({v.get('brand') for v in asin_map.values() if v.get('brand')})
+        return jsonify({'status': 'ok', 'asins': len(asin_map), 'brands': brands})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/levanta/deals')
 def levanta_deals():
     from product_api import LevantaAPI

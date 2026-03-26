@@ -1024,36 +1024,57 @@ class ArcherAPI:
                 levanta_brand_index.setdefault(b, []).append(asin_val)
 
         logging.info(f'[SCAN] Levanta brand index: {len(levanta_brand_index)} unique brands in catalog')
+
+        def _brands_match(a, b):
+            """True if brands share at least one significant word (≥4 chars)."""
+            a_words = {w for w in a.lower().split() if len(w) >= 4}
+            b_words = {w for w in b.lower().split() if len(w) >= 4}
+            return bool(a_words & b_words)
+
+        # Build a resolved map: direct_brand → list of matching Levanta catalog brands
+        brand_resolution = {}
+        for direct_brand in direct_levanta_brands:
+            # Exact match first, then partial word match
+            if direct_brand in levanta_brand_index:
+                brand_resolution[direct_brand] = [direct_brand]
+            else:
+                matches = [lv_b for lv_b in levanta_brand_index if _brands_match(direct_brand, lv_b)]
+                if matches:
+                    brand_resolution[direct_brand] = matches
+                    logging.info(f'[SCAN]   brand "{direct_brand}" → partial match: {matches}')
+
         # Log which target brands were found vs missed
         for b in sorted(direct_levanta_brands):
-            found = len(levanta_brand_index.get(b, []))
-            logging.info(f'[SCAN]   brand "{b}": {found} Levanta products')
+            resolved = brand_resolution.get(b, [])
+            count = sum(len(levanta_brand_index.get(r, [])) for r in resolved)
+            logging.info(f'[SCAN]   brand "{b}": {count} Levanta products (via {resolved or "no match"})')
 
         levanta_expanded = []
         expanded_asin_set = earnings_asin_set | {e['asin'] for e in archer_expanded}
         for brand in direct_levanta_brands:
-            for lv_asin in levanta_brand_index.get(brand, []):
-                if lv_asin in expanded_asin_set:
-                    continue
-                meta = lv_data_map.get(lv_asin, {})
-                levanta_expanded.append({
-                    'asin':                   lv_asin,
-                    'product_name':           meta.get('title', ''),
-                    'brand':                  meta.get('brand', ''),
-                    'price':                  meta.get('price', ''),
-                    'commission':             '',
-                    'levanta_commission':     meta.get('commission_pct', ''),
-                    'levanta_image':          meta.get('imageUrl', ''),
-                    'networks':               ['levanta'],
-                    'archer_matched':         False,
-                    'levanta_matched':        True,
-                    'levanta_brand_match':    True,
-                    'clicks': 0, 'items_ordered': 0, 'direct_ordered': 0,
-                    'conversion_rate': '', 'amazon_commission_rate': '',
-                    'items_shipped': 0, 'items_returned': 0,
-                    'shipped_revenue': 0.0, 'total_earnings': 0.0,
-                    'time_period': '', 'steph_revenue': 0.0, 'steph_units': 0,
-                })
+            for resolved_brand in brand_resolution.get(brand, []):
+                for lv_asin in levanta_brand_index.get(resolved_brand, []):
+                    if lv_asin in expanded_asin_set:
+                        continue
+                    meta = lv_data_map.get(lv_asin, {})
+                    levanta_expanded.append({
+                        'asin':                   lv_asin,
+                        'product_name':           meta.get('title', ''),
+                        'brand':                  meta.get('brand', ''),
+                        'price':                  meta.get('price', ''),
+                        'commission':             '',
+                        'levanta_commission':     meta.get('commission_pct', ''),
+                        'levanta_image':          meta.get('imageUrl', ''),
+                        'networks':               ['levanta'],
+                        'archer_matched':         False,
+                        'levanta_matched':        True,
+                        'levanta_brand_match':    True,
+                        'clicks': 0, 'items_ordered': 0, 'direct_ordered': 0,
+                        'conversion_rate': '', 'amazon_commission_rate': '',
+                        'items_shipped': 0, 'items_returned': 0,
+                        'shipped_revenue': 0.0, 'total_earnings': 0.0,
+                        'time_period': '', 'steph_revenue': 0.0, 'steph_units': 0,
+                    })
 
         results.extend(levanta_expanded)
         logging.info(
