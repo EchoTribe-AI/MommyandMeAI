@@ -381,56 +381,76 @@ def archer_search():
     levanta_formatted = []
     levanta_full_count = 0
     if network in ('levanta', 'both'):
-        lv = LevantaAPI()
         try:
-            if q:
-                # search_products already resolves brand names onto each product
-                lv_raw_list = lv.search_products(q, limit=limit)
-            else:
-                # Browse mode — paginate through full catalog, up to 500 accessible products
-                brand_lookup = lv.get_brand_lookup()
-                lv_raw_list = []
-                cursor = None
-                while len(lv_raw_list) < 500:
-                    data = lv.get_products(limit=100, cursor=cursor)
-                    products = data.get('products', [])
-                    for p in products:
-                        if p.get('access') is True:
-                            p['brand'] = brand_lookup.get(p.get('brandId', ''), '')
-                            lv_raw_list.append(p)
-                    cursor = data.get('cursor')
-                    if not cursor or not products:
-                        break
-                lv_raw_list = sorted(lv_raw_list, key=lambda p: p.get('commission', 0), reverse=True)
+            lv_cache_path = 'data/network_cache_levanta.json'
+            lv_entries = []
+            cache_data = None
+            if os.path.exists(lv_cache_path):
+                with open(lv_cache_path) as f:
+                    cache_data = json.load(f)
 
-            # Apply filters before slicing (brand now available as p['brand'])
+            if not isinstance(cache_data, dict) or not cache_data:
+                lv = LevantaAPI()
+                if lv.api_key:
+                    from product_api import LevantaNetworkMatcher
+                    cache_data = LevantaNetworkMatcher().get_asin_data()
+                else:
+                    cache_data = {}
+
+            for asin_val, meta in cache_data.items():
+                try:
+                    commission_val = float(meta.get('commission', 0) or 0)
+                except (ValueError, TypeError):
+                    commission_val = 0.0
+                price_val = meta.get('price', '')
+                lv_entries.append({
+                    'asin': asin_val,
+                    'product_name': meta.get('title', ''),
+                    'company_name': meta.get('brand', ''),
+                    'price': f"${price_val}" if price_val else '',
+                    'commission_payout': meta.get('commission_pct', ''),
+                    'image_encoded_string': meta.get('imageUrl', ''),
+                    'product_category': meta.get('category', ''),
+                    'source': 'levanta',
+                    'rating': meta.get('rating', ''),
+                    'ratingsTotal': meta.get('ratingsTotal', 0),
+                    '_commission_raw': commission_val,
+                })
+
             if q:
                 q_lower = q.lower()
-                lv_raw_list = [p for p in lv_raw_list if
-                    q_lower in (p.get('title') or '').lower() or
-                    q_lower in (p.get('brand') or '').lower() or
+                lv_entries = [p for p in lv_entries if
+                    q_lower in (p.get('product_name') or '').lower() or
+                    q_lower in (p.get('company_name') or '').lower() or
                     q_lower in (p.get('asin') or '').lower()]
             if category:
-                lv_raw_list = [p for p in lv_raw_list if
-                    category.lower() in (p.get('category') or p.get('productGroup') or '').lower()]
-
-            levanta_full_count = len(lv_raw_list)
-            formatted = [lv.format_for_frontend(p) for p in lv_raw_list[offset:offset + limit]]
+                cat_lower = category.lower()
+                lv_entries = [p for p in lv_entries if
+                    cat_lower in (p.get('product_category') or '').lower()]
             if min_commission > 0:
-                formatted = [p for p in formatted if
+                lv_entries = [p for p in lv_entries if
                     float((p.get('commission_payout') or '0').replace('%', '') or 0) >= min_commission]
-            levanta_formatted = formatted
+
+            lv_entries.sort(key=lambda p: p.get('_commission_raw', 0), reverse=True)
+            levanta_full_count = len(lv_entries)
+            page_slice = lv_entries[offset:offset + limit]
+            for p in page_slice:
+                p.pop('_commission_raw', None)
+            levanta_formatted = page_slice
         except Exception as e:
-            logging.error(f"[LEVANTA] Search/browse failed: {e}")
+            logging.error(f"[LEVANTA] Catalog browse/search failed: {e}")
+
+    archer_page = results[offset:offset + limit] if network in ('archer', 'both') else []
+    combined = archer_page + levanta_formatted if network == 'both' else (archer_page or levanta_formatted)
 
     return jsonify({
-        'products': (results + levanta_formatted)[offset:offset + limit],
-        'archer': results[offset:offset + limit],
+        'products': combined[:limit],
+        'archer': archer_page,
         'archer_total': len(results),
         'archer_catalog_total': 113835,
         'levanta': levanta_formatted,
         'levanta_total': levanta_full_count,
-        'levanta_catalog_total': levanta_full_count or len(levanta_formatted),
+        'levanta_catalog_total': levanta_full_count,
     })
 
 @app.route('/archer/levanta_match_scan')

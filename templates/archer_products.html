@@ -617,8 +617,9 @@
       (data.levanta || []).forEach(p => {
         if (p.asin) state.levantaMap[p.asin] = p;
       });
-      document.getElementById('stat-levanta').textContent = Object.keys(state.levantaMap).length;
-      renderMatchedGrid();  // re-render to show Levanta badges
+      const catalogTotal = data.levanta_catalog_total || data.levanta_total || Object.keys(state.levantaMap).length;
+      document.getElementById('stat-levanta').textContent = catalogTotal.toLocaleString();
+      renderMatchedGrid();
     } catch(e) {
       console.error('Levanta map load failed:', e);
     }
@@ -953,8 +954,8 @@
       ${!isMatched && p.source === 'levanta' ? '<div class="pc-matched-badge" style="background:#e8f8f4;color:#0a6b52;border-color:rgba(10,107,82,0.3);">⚡ Levanta</div>' : ''}
       <div class="pc-check">${isSelected || isLinked ? '✓' : ''}</div>
       <div class="pc-image">
-        ${p.image_encoded_string ?
-          `<img src="${p.image_encoded_string}" alt="${escStr(name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+        ${(p.image_encoded_string || p.levanta_image) ?
+          `<img src="${p.image_encoded_string || p.levanta_image}" alt="${escStr(name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
            <div class="pc-image-placeholder" style="display:none;background:${brandColor(brand)};font-size:22px;font-weight:700;color:#555;">${brand ? brand[0].toUpperCase() : '?'}</div>`
           : `<div class="pc-image-placeholder" style="background:${brandColor(brand)};font-size:22px;font-weight:700;color:#555;">${brand ? brand[0].toUpperCase() : '?'}</div>`}
       </div>

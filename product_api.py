@@ -354,10 +354,13 @@ class ArcherNetworkMatcher(NetworkMatcher):
                     asin = (row.get('ASIN') or '').strip()
                     if not asin:
                         continue
+                    raw_price = (row.get('Product Price') or '').strip()
+                    if raw_price.lower() in ('nan', 'none', ''):
+                        raw_price = ''
                     data[asin] = {
                         'product_name':    (row.get('Product Titile') or row.get('Product Title') or '').strip(),
                         'brand':           (row.get('Brand') or '').strip(),
-                        'price':           (row.get('Product Price') or '').strip(),
+                        'price':           raw_price,
                         'commission':      (row.get('Affiliate Commission Payout') or '').strip(),
                         'archer_category': (row.get('Category') or '').strip(),
                         'reviews':         (row.get('Total Reviews') or '').strip(),
@@ -918,10 +921,10 @@ class ArcherAPI:
                     'image_encoded_string': archer_image_map.get(asin, ''),
                 })
 
-            # Enrich from Levanta commission data if matched
             lv_data = network_data.get('levanta', {}).get(asin, {})
             if lv_data:
                 entry['levanta_commission'] = lv_data.get('commission_pct', '')
+                entry['levanta_image'] = lv_data.get('imageUrl', '')
                 if not entry.get('product_name'):
                     entry['product_name'] = lv_data.get('title', '')
                 if not entry.get('brand'):
@@ -1037,9 +1040,10 @@ class ArcherAPI:
                     'asin':                   lv_asin,
                     'product_name':           meta.get('title', ''),
                     'brand':                  meta.get('brand', ''),
-                    'price':                  '',
+                    'price':                  meta.get('price', ''),
                     'commission':             '',
                     'levanta_commission':     meta.get('commission_pct', ''),
+                    'levanta_image':          meta.get('imageUrl', ''),
                     'networks':               ['levanta'],
                     'archer_matched':         False,
                     'levanta_matched':        True,
@@ -1190,13 +1194,26 @@ class LevantaAPI:
 
     # ── BRANDS ───────────────────────────────────────────
     def get_brands(self, access_only=True, marketplace="amazon.com", limit=100):
-        params = {"limit": limit, "marketplace": marketplace}
-        if access_only:
-            params["access"] = "true"
-        r = requests.get(f"{self.LEVANTA_BASE}/brands",
-            headers=self._headers(), params=params, timeout=15)
-        r.raise_for_status()
-        return r.json()
+        all_brands = []
+        cursor = None
+        pages = 0
+        while pages < 50:
+            params = {"limit": limit, "marketplace": marketplace}
+            if access_only:
+                params["access"] = "true"
+            if cursor:
+                params["cursor"] = cursor
+            r = requests.get(f"{self.LEVANTA_BASE}/brands",
+                headers=self._headers(), params=params, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            brands = data.get('brands', [])
+            all_brands.extend(brands)
+            cursor = data.get('cursor')
+            if not cursor or not brands:
+                break
+            pages += 1
+        return {'brands': all_brands}
 
     # ── PRODUCTS ─────────────────────────────────────────
     def get_products(self, limit=100, cursor=None, marketplace="amazon.com"):
@@ -1276,14 +1293,14 @@ class LevantaAPI:
         """
         Fetch all Levanta brands and return a dict of brandId -> brand name.
         Products only carry a brandId UUID, so we need this to get human-readable names.
-        Brands API confirmed to return: {brands: [{id: "uuid", name: "Brand Name", ...}]}
+        Brands API returns: {brands: [{brandId: "uuid", brandName: "Brand Name", ...}]}
         """
         brand_lookup = {}
         try:
             data = self.get_brands(access_only=False)
             for b in data.get('brands', []):
-                bid  = b.get('id', '')
-                name = b.get('name', '')
+                bid  = b.get('brandId', '')
+                name = b.get('brandName', '')
                 if bid and name:
                     brand_lookup[bid] = name
             logging.info(f'[LEVANTA] Brand lookup built: {len(brand_lookup)} brands')
@@ -1297,17 +1314,15 @@ class LevantaAPI:
         asin -> {commission, commission_pct, title, brand} for accessible products only.
         Brand name is resolved via brandId → brands endpoint lookup.
         """
-        # Step 1: build brandId → name map
         brand_name_map = {}
         try:
             brands_data = self.get_brands(access_only=False)
             for b in brands_data.get('brands', []):
-                brand_name_map[b.get('id')] = b.get('name', '')
+                brand_name_map[b.get('brandId', '')] = b.get('brandName', '')
             logging.info(f'[LEVANTA] Brand name map: {len(brand_name_map)} brands')
         except Exception as e:
             logging.warning(f'[LEVANTA] Brand lookup failed: {e}')
 
-        # Step 2: page through products with brand name resolved
         asin_map = {}
         cursor = None
         pages = 0
@@ -1319,11 +1334,18 @@ class LevantaAPI:
                     asin = p.get('asin')
                     if asin:
                         brand_name = brand_name_map.get(p.get('brandId'), '')
+                        commission_val = p.get('commission', 0)
+                        pricing = p.get('pricing', {})
                         asin_map[asin] = {
-                            'commission':     p.get('commission', 0),
-                            'commission_pct': f"{int(p.get('commission', 0) * 100)}%",
+                            'commission':     commission_val,
+                            'commission_pct': f"{int(commission_val * 100)}%" if commission_val else '',
                             'title':          p.get('title') or '',
                             'brand':          brand_name,
+                            'imageUrl':       p.get('image') or '',
+                            'category':       p.get('category') or '',
+                            'price':          pricing.get('price', ''),
+                            'rating':         p.get('rating') or '',
+                            'ratingsTotal':   p.get('ratingsTotal') or 0,
                         }
             cursor = data.get('cursor')
             if not cursor or not products:
