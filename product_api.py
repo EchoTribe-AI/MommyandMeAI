@@ -426,11 +426,15 @@ class ArcherAPI:
         self._maybe_rescan()
 
     def _maybe_rescan(self):
-        """Trigger a fresh scan if matched_asins.json is stale (missing 'networks' field)."""
+        """Trigger a fresh scan if matched_asins.json is missing or stale."""
         try:
+            if not os.path.exists(self.MATCHED_ASINS_PATH):
+                logging.info("[SCAN] matched_asins.json missing — triggering initial scan")
+                self.asin_match_scan()
+                return
             matched = self._load_matched_json()
             if matched and 'networks' not in matched[0]:
-                logging.info("[SCAN] matched_asins.json is stale — triggering background rescan")
+                logging.info("[SCAN] matched_asins.json is stale — triggering rescan")
                 self.asin_match_scan()
         except Exception as e:
             logging.warning(f"[SCAN] Startup rescan check failed: {e}")
