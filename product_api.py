@@ -301,25 +301,73 @@ class NetworkMatcher:
 
 
 class ArcherNetworkMatcher(NetworkMatcher):
+    """
+    Reads the full Archer catalog from the local CSV file.
+    Falls back to SQLite if the CSV is not present.
+    API calls are only made later, on-demand, to fetch images/details for matched ASINs.
+    """
     name = 'archer'
+    CATALOG_CSV = 'data/Archer Full Catalog 2026.csv'
 
     def __init__(self, db_path):
         self.db_path = db_path
 
-    def get_asin_set(self) -> set:
+    def get_asin_data(self) -> dict:
+        import csv as _csv
+        if os.path.exists(self.CATALOG_CSV):
+            try:
+                data = {}
+                with open(self.CATALOG_CSV, newline='', encoding='utf-8-sig') as f:
+                    for raw_row in _csv.DictReader(f):
+                        # Strip whitespace from keys (CSV headers have trailing spaces)
+                        row = {k.strip(): v for k, v in raw_row.items()}
+                        asin = (row.get('ASIN') or '').strip()
+                        if not asin:
+                            continue
+                        data[asin] = {
+                            'product_name':    (row.get('Product Titile') or row.get('Product Title') or '').strip(),
+                            'brand':           (row.get('Brand') or '').strip(),
+                            'price':           (row.get('Product Price') or '').strip(),
+                            'commission':      (row.get('Affiliate Commission Payout') or '').strip(),
+                            'archer_category': (row.get('Category') or '').strip(),
+                            'reviews':         (row.get('Total Reviews') or '').strip(),
+                            'rating':          (row.get('Average Rating') or '').strip(),
+                        }
+                logging.info(f"[ARCHER] get_asin_data: {len(data)} ASINs from catalog CSV")
+                return data
+            except Exception as e:
+                logging.warning(f"[ARCHER] CSV read failed, falling back to SQLite: {e}")
+
+        # Fallback: SQLite catalog
         if not os.path.exists(self.db_path):
-            return set()
+            return {}
         try:
             conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT asin FROM products WHERE product_status='active' OR product_status IS NULL"
+                "SELECT asin, product_name, company_name, price, commission_payout, "
+                "product_category, total_reviews, avg_rating FROM products "
+                "WHERE product_status='active' OR product_status IS NULL"
             ).fetchall()
             conn.close()
-            return {r[0] for r in rows if r[0]}
+            data = {}
+            for r in rows:
+                if r['asin']:
+                    data[r['asin']] = {
+                        'product_name':    r['product_name'] or '',
+                        'brand':           r['company_name'] or '',
+                        'price':           r['price'] or '',
+                        'commission':      r['commission_payout'] or '',
+                        'archer_category': r['product_category'] or '',
+                        'reviews':         r['total_reviews'] or '',
+                        'rating':          r['avg_rating'] or '',
+                    }
+            logging.info(f"[ARCHER] get_asin_data: {len(data)} ASINs from SQLite fallback")
+            return data
         except Exception as e:
             logging.warning(f"[ARCHER] get_asin_set failed: {e}")
-            return set()
+            return {}
 
 
 class LevantaNetworkMatcher(NetworkMatcher):
@@ -793,18 +841,22 @@ class ArcherAPI:
             network_sets[m.name] = set(data.keys())
             logging.info(f'[SCAN] {m.name}: {len(network_sets[m.name])} ASINs in catalog')
 
-        # Batch-fetch Archer product details for matched ASINs only
+        # Fetch images for matched Archer ASINs from SQLite (CSV has no images)
         archer_asins = [a for a in asin_list if a in network_sets.get('archer', set())]
-        archer_map = {}
+        archer_image_map = {}
         if archer_asins:
-            conn = self._db_connect()
-            conn.row_factory = sqlite3.Row
-            ph = ','.join('?' * len(archer_asins))
-            rows = conn.execute(
-                f'SELECT * FROM products WHERE asin IN ({ph})', archer_asins
-            ).fetchall()
-            conn.close()
-            archer_map = {r['asin']: dict(r) for r in rows}
+            try:
+                conn = self._db_connect()
+                conn.row_factory = sqlite3.Row
+                ph = ','.join('?' * len(archer_asins))
+                rows = conn.execute(
+                    f'SELECT asin, image_encoded_string FROM products WHERE asin IN ({ph})',
+                    archer_asins
+                ).fetchall()
+                conn.close()
+                archer_image_map = {r['asin']: r['image_encoded_string'] or '' for r in rows}
+            except Exception as e:
+                logging.warning(f'[SCAN] SQLite image fetch failed: {e}')
 
         results = []
         for asin in asin_list:
@@ -831,18 +883,18 @@ class ArcherAPI:
                 **{f'{n}_matched': (asin in s) for n, s in network_sets.items()},
             }
 
-            # Enrich from Archer catalog data if matched
-            if asin in archer_map:
-                a = archer_map[asin]
+            # Enrich from Archer catalog CSV data if matched
+            archer_csv = network_data.get('archer', {}).get(asin)
+            if archer_csv:
                 entry.update({
-                    'product_name':         a.get('product_name', ''),
-                    'brand':                a.get('company_name', ''),
-                    'price':                a.get('price', ''),
-                    'commission':           a.get('commission_payout', ''),
-                    'archer_category':      a.get('product_category', ''),
-                    'rating':               a.get('avg_rating', ''),
-                    'reviews':              a.get('total_reviews', ''),
-                    'image_encoded_string': a.get('image_encoded_string', ''),
+                    'product_name':         archer_csv.get('product_name', ''),
+                    'brand':                archer_csv.get('brand', ''),
+                    'price':                archer_csv.get('price', ''),
+                    'commission':           archer_csv.get('commission', ''),
+                    'archer_category':      archer_csv.get('archer_category', ''),
+                    'rating':               archer_csv.get('rating', ''),
+                    'reviews':              archer_csv.get('reviews', ''),
+                    'image_encoded_string': archer_image_map.get(asin, ''),
                 })
 
             # Enrich from Levanta commission data if matched
