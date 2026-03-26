@@ -262,6 +262,25 @@ def archer_force_rescan():
     return jsonify(result)
 
 
+@app.route('/levanta/diag')
+def levanta_diag():
+    """Diagnostic: show raw Levanta API product shape to verify field names."""
+    from product_api import LevantaAPI
+    lv = LevantaAPI()
+    if not lv.api_key:
+        return jsonify({'error': 'No LEVANTA_API_KEY set'})
+    try:
+        data = lv.get_products(limit=3)
+        products = data.get('products', [])
+        return jsonify({
+            'total_returned': len(products),
+            'sample': products[:3],
+            'keys_in_first': list(products[0].keys()) if products else [],
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+
 @app.route('/archer/scan_status')
 def archer_scan_status():
     """Return metadata from the last scan run (scan_meta.json)."""
