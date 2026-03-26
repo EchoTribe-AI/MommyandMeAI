@@ -265,9 +265,12 @@ def archer_force_rescan():
 @app.route('/archer/scan_status')
 def archer_scan_status():
     """Return metadata from the last scan run (scan_meta.json)."""
+    import csv as _csv
     meta_path = 'data/scan_meta.json'
     earnings_path = 'data/earnings_latest.csv'
     legacy_path = 'data/2025-Q12026 amazon asin earnings.csv'
+    archer_csv_path = 'data/Archer Full Catalog 2026.csv'
+    levanta_cache_path = 'data/network_cache_levanta.json'
 
     status = {'never_run': not os.path.exists(meta_path)}
     if not status['never_run']:
@@ -279,6 +282,27 @@ def archer_scan_status():
         'earnings_latest.csv' if os.path.exists(earnings_path)
         else ('2025-Q12026 amazon asin earnings.csv' if os.path.exists(legacy_path) else None)
     )
+
+    # Catalog sizes for stat bar
+    archer_size = 0
+    if os.path.exists(archer_csv_path):
+        try:
+            with open(archer_csv_path, newline='', encoding='utf-8-sig') as f:
+                archer_size = sum(1 for row in _csv.DictReader(f) if (row.get('ASIN') or '').strip())
+        except Exception:
+            pass
+    status['archer_catalog_size'] = archer_size
+
+    levanta_size = 0
+    if os.path.exists(levanta_cache_path):
+        try:
+            with open(levanta_cache_path) as f:
+                lv = json.load(f)
+            levanta_size = len(lv) if isinstance(lv, list) else len(lv.keys())
+        except Exception:
+            pass
+    status['levanta_catalog_size'] = levanta_size
+
     return jsonify(status)
 
 @app.route('/archer/search')

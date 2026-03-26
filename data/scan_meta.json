@@ -1,10 +1,10 @@
 {
-  "scanned_at": "2026-03-25T20:50:53.185901",
+  "scanned_at": "2026-03-26T09:35:30.074661",
   "total_asins": 586,
   "networks": {
-    "archer": 0,
+    "archer": 3,
     "levanta": 0
   },
-  "any_matched": 0,
-  "unmatched": 586
+  "any_matched": 3,
+  "unmatched": 583
 }

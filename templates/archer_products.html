@@ -1209,6 +1209,17 @@
           `CSV: ${data.csv_filename || 'none'}`;
         showScanResults(data);
       }
+      // Update catalog stat bar with real sizes
+      if (data.archer_catalog_size) {
+        const archerK = data.archer_catalog_size >= 1000
+          ? `${(data.archer_catalog_size / 1000).toFixed(0)}K`
+          : data.archer_catalog_size.toLocaleString();
+        document.getElementById('stat-catalog').textContent = archerK;
+      }
+      if (data.levanta_catalog_size) {
+        document.getElementById('stat-levanta').textContent = data.levanta_catalog_size.toLocaleString();
+      }
+
       // Enable scan button if CSV already on server
       if (data.csv_uploaded || data.csv_filename) {
         document.getElementById('btn-run-scan').disabled = false;
