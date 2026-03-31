@@ -1444,25 +1444,30 @@ class URLGeniusAPI:
             logging.warning(f"[URLGENIUS] Registry save failed: {e}")
 
     def seed_registry(self):
-        """Fetch all existing URLgenius links and seed the registry file."""
+        """
+        Page through ALL URLGenius links and build the local registry.
+        Handles 20K+ links via list_links_all() pagination.
+        """
         if not self.api_key:
             return 0
         try:
-            data = self.list_links(limit=500)
-            links = data.get('links', data if isinstance(data, list) else [])
+            links = self.list_links_all(page_size=500)
             n = 0
             for link in links:
                 dest = link.get('url', '')
                 genius_url = link.get('genius_url', '')
                 if dest and genius_url:
                     self._registry[dest] = {
-                        'genius_url': genius_url,
-                        'link_id': link.get('id'),
+                        'genius_url':    genius_url,
+                        'link_id':       link.get('id'),
                         'affiliate_url': dest,
+                        'title':         link.get('title', ''),
+                        'clicks':        link.get('clicks', 0),
+                        'created_at':    link.get('created_at', ''),
                     }
                     n += 1
             self._save_registry()
-            logging.info(f"[URLGENIUS] Registry seeded: {n} links loaded")
+            logging.info(f"[URLGENIUS] Registry seeded: {n} / {len(links)} links stored")
             return n
         except Exception as e:
             logging.error(f"[URLGENIUS] Registry seed failed: {e}")
@@ -1520,12 +1525,43 @@ class URLGeniusAPI:
 
         return result
 
-    def list_links(self, limit=50):
-        """List all created links."""
+    def list_links(self, limit=500, page=1):
+        """Fetch one page of links."""
         r = requests.get(f"{self.BASE}/links", headers=self._headers(),
-                         params={"limit": limit}, timeout=10)
+                         params={"limit": limit, "page": page}, timeout=30)
         r.raise_for_status()
         return r.json()
+
+    def list_links_all(self, page_size=500, progress_cb=None):
+        """
+        Paginate through all URLGenius links and return them as a flat list.
+        Tries page-based pagination first (page=1, 2, …); stops when a page
+        returns fewer records than page_size.
+        progress_cb(fetched, total_hint) called after each page if provided.
+        """
+        all_links = []
+        page = 1
+        while True:
+            data = self.list_links(limit=page_size, page=page)
+            # Normalise: API may return list directly or {links: [...], total: N}
+            if isinstance(data, list):
+                batch = data
+                total_hint = None
+            else:
+                batch = data.get('links', [])
+                total_hint = data.get('total') or data.get('count')
+
+            all_links.extend(batch)
+            if progress_cb:
+                progress_cb(len(all_links), total_hint)
+            logging.info(f'[URLGENIUS] Page {page}: {len(batch)} links (total so far: {len(all_links)})')
+
+            # Stop when page is short (last page) or empty
+            if len(batch) < page_size:
+                break
+            page += 1
+
+        return all_links
 
     def get_link_stats(self, link_id):
         """Fetch 30-day stats for a single link."""

@@ -1062,14 +1062,34 @@ def urlgenius_create_link():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/urlgenius/links')
-def urlgenius_list_links():
+@app.route('/urlgenius/sync_registry')
+def urlgenius_sync_registry():
+    """
+    Page through all URLGenius links via the API and rebuild the local registry.
+    Handles 20K+ links. Can take 30–60s on a cold pull.
+    """
     from product_api import URLGeniusAPI
     ug = URLGeniusAPI()
     if not ug.api_key:
         return jsonify({'error': 'URLGENIUS_API_KEY not set'}), 400
     try:
-        return jsonify(ug.list_links())
+        n = ug.seed_registry()
+        return jsonify({'status': 'ok', 'links_synced': n, 'registry_size': len(ug._registry)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/urlgenius/links')
+def urlgenius_list_links():
+    """Return one page of links. Use ?page=N&limit=500 to paginate."""
+    from product_api import URLGeniusAPI
+    ug = URLGeniusAPI()
+    if not ug.api_key:
+        return jsonify({'error': 'URLGENIUS_API_KEY not set'}), 400
+    try:
+        page  = int(request.args.get('page', 1))
+        limit = min(int(request.args.get('limit', 500)), 500)
+        return jsonify(ug.list_links(limit=limit, page=page))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
