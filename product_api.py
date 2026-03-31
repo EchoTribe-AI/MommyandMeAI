@@ -1451,7 +1451,7 @@ class URLGeniusAPI:
         if not self.api_key:
             return 0
         try:
-            links = self.list_links_all(page_size=500)
+            links = self.list_links_all()
             n = 0
             for link in links:
                 dest = link.get('url', '')
@@ -1525,43 +1525,30 @@ class URLGeniusAPI:
 
         return result
 
-    def list_links(self, limit=500, page=1):
-        """Fetch one page of links."""
+    def list_links(self, page=None):
+        """
+        Fetch URLGenius links.
+        - No args → returns all links in one response (20K+ items in {'links': [...]}).
+        - page=N  → paginated mode (~50/page), response includes meta.pagination.
+        """
+        params = {}
+        if page is not None:
+            params['page'] = page
+        timeout = 60 if page is None else 15
         r = requests.get(f"{self.BASE}/links", headers=self._headers(),
-                         params={"limit": limit, "page": page}, timeout=30)
+                         params=params, timeout=timeout)
         r.raise_for_status()
         return r.json()
 
-    def list_links_all(self, page_size=500, progress_cb=None):
+    def list_links_all(self):
         """
-        Paginate through all URLGenius links and return them as a flat list.
-        Tries page-based pagination first (page=1, 2, …); stops when a page
-        returns fewer records than page_size.
-        progress_cb(fetched, total_hint) called after each page if provided.
+        Return all URLGenius links as a flat list.
+        Calls the no-params endpoint which dumps every link in one response.
         """
-        all_links = []
-        page = 1
-        while True:
-            data = self.list_links(limit=page_size, page=page)
-            # Normalise: API may return list directly or {links: [...], total: N}
-            if isinstance(data, list):
-                batch = data
-                total_hint = None
-            else:
-                batch = data.get('links', [])
-                total_hint = data.get('total') or data.get('count')
-
-            all_links.extend(batch)
-            if progress_cb:
-                progress_cb(len(all_links), total_hint)
-            logging.info(f'[URLGENIUS] Page {page}: {len(batch)} links (total so far: {len(all_links)})')
-
-            # Stop when page is short (last page) or empty
-            if len(batch) < page_size:
-                break
-            page += 1
-
-        return all_links
+        data = self.list_links()
+        links = data.get('links', data if isinstance(data, list) else [])
+        logging.info(f'[URLGENIUS] list_links_all: {len(links)} links fetched')
+        return links
 
     def get_link_stats(self, link_id):
         """Fetch 30-day stats for a single link."""
