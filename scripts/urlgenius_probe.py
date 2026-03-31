@@ -3,50 +3,43 @@ import json
 import os
 
 api_key = os.environ.get("URLGENIUS_API_KEY")
+BASE = "https://api.urlgeni.us/api/v2"
+headers = {"api-key": api_key}
 
-# Hit the base endpoint with no pagination params first
-url = "https://api.urlgeni.us/api/v2/links"
+# Get first link ID from the list
+print("=== FETCHING FIRST LINK ID ===")
+r = requests.get(f"{BASE}/links", headers=headers, params={"page": 1}, timeout=15)
+data = r.json()
+links = data.get('links', [])
+if not links:
+    print("No links returned"); exit()
+first = links[0]
+link_id = first['id']
+print(f"First link: id={link_id}, url={first.get('url')}")
+print(f"Fields in list response: {list(first.keys())}")
 
-response = requests.get(url, headers={"api-key": api_key})
-
-print("=== STATUS CODE ===")
-print(response.status_code)
-
-print("\n=== RESPONSE HEADERS (pagination-related) ===")
-for k, v in response.headers.items():
-    if any(x in k.lower() for x in ["link", "cursor", "page", "next", "total", "count"]):
-        print(f"  {k}: {v}")
-
-print("\n=== FULL RESPONSE (first 3000 chars) ===")
-raw = response.text[:3000]
-print(raw)
-
-print("\n=== TOP-LEVEL KEYS ===")
-try:
-    data = response.json()
-    print(list(data.keys()) if isinstance(data, dict) else f"Array of {len(data)} items")
-
-    # Look for pagination fields
-    if isinstance(data, dict):
-        for key in data:
-            val = data[key]
-            if not isinstance(val, list):
-                print(f"  {key}: {val}")
-            else:
-                print(f"  {key}: [array of {len(val)} items]")
-except Exception as e:
-    print(f"JSON parse error: {e}")
-
-# Also try hitting with page=2 to see if offset style works at all
-print("\n=== TRYING ?page=2 ===")
-r2 = requests.get("https://api.urlgeni.us/api/v2/links", headers={"api-key": api_key}, params={"page": 2})
+# Fetch single link by ID
+print(f"\n=== GET /links/{link_id} ===")
+r2 = requests.get(f"{BASE}/links/{link_id}", headers=headers, timeout=10)
 print(f"Status: {r2.status_code}")
+print(f"Raw (first 2000 chars):\n{r2.text[:2000]}")
 try:
     d2 = r2.json()
-    print(f"Top keys: {list(d2.keys()) if isinstance(d2, dict) else 'array'}")
+    print(f"\nTop-level keys: {list(d2.keys()) if isinstance(d2, dict) else type(d2)}")
     if isinstance(d2, dict):
-        for key in d2:
-            if not isinstance(d2[key], list):
-                print(f"  {key}: {d2[key]}")
-except:
-    print(r2.text[:500])
+        for k, v in d2.items():
+            if not isinstance(v, (dict, list)):
+                print(f"  {k}: {v}")
+            elif isinstance(v, dict):
+                print(f"  {k}: {v}")
+            else:
+                print(f"  {k}: [list of {len(v)}]")
+except Exception as e:
+    print(f"JSON error: {e}")
+
+# Also check if /links supports a 'stats=true' or 'include=stats' param
+print("\n=== TRYING ?page=1&include=stats ===")
+r3 = requests.get(f"{BASE}/links", headers=headers, params={"page": 1, "include": "stats"}, timeout=15)
+d3 = r3.json()
+sample = (d3.get('links') or [{}])[0]
+print(f"Fields with include=stats: {list(sample.keys())}")
