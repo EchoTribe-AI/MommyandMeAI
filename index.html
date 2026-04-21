@@ -432,5 +432,15 @@ body { font-family: 'Nunito', sans-serif; background: var(--cream); color: var(-
   </div>
 </div>
 
+<script>
+function switchMode(mode, btn) {
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const target = document.getElementById(mode + '-view');
+  if (target) target.classList.add('active');
+}
+
+</script>
 </body>
 </html>
